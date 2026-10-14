@@ -6,6 +6,7 @@ doesn't care whether mail is printed locally or sent with AWS SES.
 
 import re
 from datetime import datetime, timezone
+from email import policy
 from email.message import EmailMessage
 from email.utils import make_msgid
 from pathlib import Path
@@ -20,15 +21,21 @@ class Mailer(Protocol):
         ...
 
 
+# Email lines may be up to 998 characters (RFC 5322). Python's default of 78
+# makes it re-encode bodies with long links, splitting them with "=" signs.
+LONG_LINES = policy.default.clone(max_line_length=998)
+
+
 def build_message(to: str, subject: str, body: str, reply_to: str | None = None) -> EmailMessage:
-    msg = EmailMessage()
+    msg = EmailMessage(policy=LONG_LINES)
     msg["From"] = f"FixTrail <notifications@{settings.inbound_email_domain}>"
     msg["To"] = to
     msg["Subject"] = subject
     msg["Message-ID"] = make_msgid(domain=settings.inbound_email_domain)
     if reply_to:
         msg["Reply-To"] = reply_to
-    msg.set_content(body)
+    # Plain ASCII goes out as-is, so links and fingerprints stay copy-pasteable.
+    msg.set_content(body, cte="7bit" if body.isascii() else "quoted-printable")
     return msg
 
 

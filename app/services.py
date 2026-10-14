@@ -255,6 +255,31 @@ def _open_issues(conn) -> list[dict]:
     return [i for i in db.list_issues(conn) if i["status"] != "closed"]
 
 
+def queue_photo_reply_confirmation(conn, issue_id: str, added: int, skipped: list[str]) -> None:
+    _later(_email_tenant_photo_result, db.database_path(conn), issue_id, added, list(skipped))
+
+
+def _email_tenant_photo_result(db_path: str, issue_id: str, added: int, skipped: list[str]) -> None:
+    """Reply to the tenant after they emailed photos: what was added, what wasn't."""
+    conn = db.connect(db_path)
+    try:
+        issue = db.get_issue(conn, issue_id)
+        prop = db.get_or_create_property(conn)
+        if added:
+            headline = f"{added} photo{'s' if added != 1 else ''} added to: {issue['title']}"
+        else:
+            headline = f"No photos were added to: {issue['title']}"
+        lines = [f"Hi {prop['tenant_name']},", "", headline + "."]
+        if skipped:
+            lines += ["", "Not added:"] + [f"- {reason}" for reason in skipped]
+            lines += ["", "FixTrail accepts JPEG and PNG photos up to "
+                          f"{settings.max_photo_mb} MB each."]
+        lines += ["", f"See the timeline: {settings.base_url}/issues/{issue_id}"]
+        _mailer().send(prop["tenant_email"], headline, "\n".join(lines) + "\n" + fingerprint_footer(conn))
+    finally:
+        conn.close()
+
+
 def find_issue(conn, query: str, include_closed: bool = False) -> tuple[dict | None, str | None]:
     """Return (issue, None) or (None, a short question/explanation to speak)."""
     issues = db.list_issues(conn) if include_closed else _open_issues(conn)

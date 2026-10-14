@@ -241,6 +241,13 @@ def test_report_durations_and_stats():
     assert stats["scheduled_for"] == "Friday, October 9, 2026 at 9:00 AM"
 
 
+def test_long_links_are_never_split_in_raw_email():
+    from app.mailer import build_message
+    url = "https://fixtrail.example.com/issues/b8369648-8c28-456f-b24b-d069f032d398/photos"
+    raw = build_message("t@example.com", "Subject", f"See the timeline: {url}\n").as_bytes().decode()
+    assert url in raw
+
+
 def test_dates_are_easy_to_say():
     assert models.nice_date("2026-10-20 14:30") == "Tuesday, October 20 at 2:30 PM"
     assert models.nice_date("2026-10-20") == "Tuesday, October 20"

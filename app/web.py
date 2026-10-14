@@ -97,6 +97,12 @@ def _timeline(events: list[dict], landlord_token: str | None = None) -> list[dic
         if e["type"] == "photo_added":
             row["photo_url"] = f"/photos/{e['id']}" + (f"?t={landlord_token}" if landlord_token else "")
             row["details"].append(("Photo fingerprint (sha256)", p.get("sha256")))
+            if p.get("source") == "email_reply":
+                row["details"].append(("Emailed by", p.get("sender")))
+                verdicts = p.get("verdicts")
+                if isinstance(verdicts, dict):
+                    verdicts = ", ".join(f"{k.upper()} {v}" for k, v in sorted(verdicts.items()))
+                row["details"].append(("Email checks", verdicts))
         if p.get("message_id"):
             row["details"].append(("Sent to", p.get("to")))
             row["details"].append(("Message-ID", p.get("message_id")))
