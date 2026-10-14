@@ -59,3 +59,23 @@
 - Severity: medium
 - Workaround: Use free-tier options, small Bedrock models, and a billing alert; design so everything runs locally without AWS.
 - Suggestion for Amazon: Reserve credits for registered participants, or list which AWS Builder services stay within the free tier.
+
+### Entry 7: Strands Agents SDK pins an older MCP SDK
+- Tool/API/SDK: Strands Agents SDK (`strands-agents` 1.61.0), MCP Python SDK
+- Task attempted: Add a Strands agent (Amazon Bedrock) as the Alexa+ simulator, in the same app as the FixTrail MCP server.
+- Steps taken: Checked PyPI metadata before installing.
+- Expected: Strands works with the latest MCP SDK (2.3.0).
+- Actually happened: `strands-agents` 1.61.0 requires `mcp<2.2`, so installing it silently downgrades the MCP SDK to 2.1.1.
+- Severity: medium
+- Workaround: Tested FixTrail on MCP 2.1.1 in a throwaway environment first (all 74 tests passed, spec 2025-11-25 still supported), then pinned `mcp>=2.1,<2.2` in requirements.txt with a comment explaining why.
+- Suggestion for Amazon: Keep Strands' MCP dependency range current with MCP SDK releases, or document the supported MCP versions prominently.
+
+### Entry 8: Agent Skills validator command name differs from the spec
+- Tool/API/SDK: Agent Skills reference library (`skills-ref` 0.1.1)
+- Task attempted: Validate `skills/fixtrail/SKILL.md`.
+- Steps taken: Followed the specification page: `skills-ref validate ./my-skill`.
+- Expected: A `skills-ref` command after `pip install skills-ref`.
+- Actually happened: The package installs a command named `agentskills`, not `skills-ref`. `agentskills validate skills/fixtrail` reported "Valid skill".
+- Severity: low
+- Workaround: Use `agentskills validate <folder>`.
+- Suggestion: Align the documented command with the installed one. (Not an Amazon tool, but it affects the Alexa+ track's Agent Skills requirement.)

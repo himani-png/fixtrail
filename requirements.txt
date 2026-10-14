@@ -1,8 +1,15 @@
-mcp==2.3.0
+# MCP server. Pinned below 2.2 because strands-agents 1.61 requires mcp<2.2.
+# 2.1.x supports MCP spec 2025-11-25 and Streamable HTTP.
+mcp>=2.1,<2.2
 fastapi
 uvicorn
 jinja2
 python-multipart
 python-dotenv
+
+# Alexa+ simulator agent (Amazon Bedrock via the Strands Agents SDK; includes boto3)
+strands-agents==1.61.0
+
+# Tests
 pytest
 httpx

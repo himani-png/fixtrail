@@ -26,10 +26,16 @@ class Settings:
     database_path: str
     inbound_email_domain: str
     max_photo_mb: int
+    simulator_mode: str
+    simulator_mcp_url: str
+    bedrock_model_id: str
+    aws_region: str
 
+
+_base_url = os.getenv("BASE_URL", "http://localhost:8000").rstrip("/")
 
 settings = Settings(
-    base_url=os.getenv("BASE_URL", "http://localhost:8000").rstrip("/"),
+    base_url=_base_url,
     property_address=os.getenv("PROPERTY_ADDRESS", "12 Example St, Apt 3"),
     tenant_name=os.getenv("TENANT_NAME", "Alex Tenant"),
     tenant_email=os.getenv("TENANT_EMAIL", "tenant@example.com"),
@@ -41,4 +47,8 @@ settings = Settings(
     database_path=os.getenv("DATABASE_PATH", "fixtrail.db"),
     inbound_email_domain=os.getenv("INBOUND_EMAIL_DOMAIN", "fixtrail.example.com"),
     max_photo_mb=int(os.getenv("MAX_PHOTO_MB", "10")),
+    simulator_mode=os.getenv("SIMULATOR_MODE", "offline"),
+    simulator_mcp_url=os.getenv("SIMULATOR_MCP_URL", f"{_base_url}/mcp"),
+    bedrock_model_id=os.getenv("BEDROCK_MODEL_ID", "us.amazon.nova-lite-v1:0"),
+    aws_region=os.getenv("AWS_REGION", "us-east-1"),
 )

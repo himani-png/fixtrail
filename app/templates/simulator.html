@@ -1,0 +1,154 @@
+{% extends "base.html" %}
+{% block title %}Alexa+ simulator · FixTrail{% endblock %}
+{% block nav %}<a href="/">Issues</a><a href="/simulator">Simulator</a><a href="/verify">Verify record</a><a href="/logout">Log out</a>{% endblock %}
+
+{% block content %}
+<style>
+  .sim { display: flex; flex-direction: column; align-items: center; text-align: center; }
+  .mic { width: 112px; height: 112px; border-radius: 50%; border: 0; margin: 20px 0 8px;
+         background: radial-gradient(circle at 35% 30%, #38d6ff, #1a6fd6 70%); color: #fff;
+         font-size: 2.4rem; cursor: pointer; box-shadow: 0 0 0 0 rgba(56, 214, 255, .6); }
+  .mic:disabled { opacity: .5; cursor: not-allowed; }
+  .mic.listening { animation: pulse 1.2s infinite; }
+  .mic.thinking { animation: spin 1.4s linear infinite; background: radial-gradient(circle at 35% 30%, #7d9cff, #5b3fd6 70%); }
+  @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(56,214,255,.55); } 100% { box-shadow: 0 0 0 26px rgba(56,214,255,0); } }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .mic.listening, .mic.thinking { animation: none; } }
+  .status { min-height: 1.5em; }
+  .chat { width: 100%; margin-top: 16px; text-align: left; display: flex; flex-direction: column; gap: 10px; }
+  .bubble { max-width: 88%; padding: 10px 14px; border-radius: 14px; }
+  .bubble.you { align-self: flex-end; background: var(--accent); color: var(--accent-text); border-bottom-right-radius: 4px; }
+  .bubble.alexa { align-self: flex-start; background: var(--card); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
+  .bubble.error { align-self: flex-start; background: var(--bad-bg); color: var(--bad); }
+  .tools { display: block; margin-top: 4px; font-size: .78rem; color: var(--muted); }
+  .typed { display: flex; gap: 8px; width: 100%; margin-top: 12px; }
+  .typed input { flex: 1; }
+  .examples { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 10px; }
+  .examples button { min-height: 36px; padding: 6px 12px; font-size: .85rem; font-weight: 500;
+                     background: transparent; color: var(--accent); }
+</style>
+
+<h1>Alexa+ simulator</h1>
+<p class="muted">
+  This page <strong>simulates Alexa+</strong>: an agent calls FixTrail's MCP tools over Streamable HTTP,
+  the same way Alexa+ would. In Bedrock mode an AI model follows the FixTrail Agent Skill; offline mode
+  uses simple keyword rules instead.
+  <br><span class="badge b-acknowledged">{{ mode }}</span>
+</p>
+
+<div class="sim">
+  <button id="mic" class="mic" type="button" aria-label="Hold a conversation: click and speak">🎙️</button>
+  <div id="status" class="status muted" role="status" aria-live="polite">Click the microphone and speak, or type below.</div>
+
+  <form id="typed" class="typed">
+    <label for="text" class="visually-hidden" style="position:absolute;left:-9999px">Message</label>
+    <input id="text" type="text" autocomplete="off" placeholder="e.g. The kitchen sink is leaking">
+    <button type="submit">Send</button>
+  </form>
+
+  <div class="examples" aria-label="Example phrases">
+    <button type="button">The kitchen sink is leaking</button>
+    <button type="button">What's still broken?</button>
+    <button type="button">I called my landlord about the sink</button>
+    <button type="button">Remind my landlord about the sink</button>
+    <button type="button">Make my repair report</button>
+  </div>
+
+  <div id="chat" class="chat" aria-live="polite"></div>
+  <p><button id="reset" type="button" class="secondary">Start a new conversation</button></p>
+  <p class="muted small">Speech recognition and spoken replies use your browser's built-in features
+    (best in Chrome or Edge). Some browsers send audio to their own speech service to transcribe it.</p>
+</div>
+
+<script>
+(() => {
+  const mic = document.getElementById("mic");
+  const status = document.getElementById("status");
+  const chat = document.getElementById("chat");
+  const form = document.getElementById("typed");
+  const input = document.getElementById("text");
+  const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  let busy = false;
+
+  function bubble(kind, text, tools) {
+    const div = document.createElement("div");
+    div.className = "bubble " + kind;
+    div.textContent = text;
+    if (tools && tools.length) {
+      const t = document.createElement("span");
+      t.className = "tools";
+      t.textContent = "MCP tool called: " + tools.join(", ");
+      div.appendChild(t);
+    }
+    chat.appendChild(div);
+    div.scrollIntoView({ behavior: "smooth", block: "end" });
+  }
+
+  function speak(text) {
+    if (!("speechSynthesis" in window)) return;
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = "en-US";
+    window.speechSynthesis.speak(utterance);
+  }
+
+  async function ask(text) {
+    text = text.trim();
+    if (!text || busy) return;
+    busy = true;
+    bubble("you", text);
+    mic.classList.add("thinking");
+    status.textContent = "Thinking…";
+    try {
+      const response = await fetch("/simulator/ask", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Something went wrong.");
+      bubble("alexa", data.reply, data.tools);
+      speak(data.reply);
+      status.textContent = "Click the microphone to talk again.";
+    } catch (error) {
+      bubble("error", error.message);
+      status.textContent = "Something went wrong. Check that the server is running.";
+    } finally {
+      mic.classList.remove("thinking");
+      busy = false;
+    }
+  }
+
+  if (Recognition) {
+    const recognizer = new Recognition();
+    recognizer.lang = "en-US";
+    recognizer.interimResults = false;
+    recognizer.maxAlternatives = 1;
+    recognizer.onstart = () => { mic.classList.add("listening"); status.textContent = "Listening…"; };
+    recognizer.onend = () => mic.classList.remove("listening");
+    recognizer.onerror = (event) => {
+      status.textContent = event.error === "not-allowed"
+        ? "Microphone access was blocked. Allow it in the address bar, or type instead."
+        : "Didn't catch that (" + event.error + "). Try again or type instead.";
+    };
+    recognizer.onresult = (event) => ask(event.results[0][0].transcript);
+    mic.addEventListener("click", () => {
+      if (busy) return;
+      window.speechSynthesis && window.speechSynthesis.cancel();
+      try { recognizer.start(); } catch (e) { /* already listening */ }
+    });
+  } else {
+    mic.disabled = true;
+    status.textContent = "This browser doesn't support speech recognition. Type below, or use Chrome or Edge.";
+  }
+
+  form.addEventListener("submit", (event) => { event.preventDefault(); ask(input.value); input.value = ""; });
+  document.querySelectorAll(".examples button").forEach((b) => b.addEventListener("click", () => ask(b.textContent)));
+  document.getElementById("reset").addEventListener("click", async () => {
+    await fetch("/simulator/reset", { method: "POST" });
+    chat.innerHTML = "";
+    status.textContent = "New conversation. Click the microphone and speak, or type below.";
+  });
+})();
+</script>
+{% endblock %}

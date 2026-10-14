@@ -5,16 +5,20 @@
   /issues/{id}/photos    upload photos               (tenant passcode)
   /respond/{token}       landlord response page      (secret link, no login)
   /photos/{event_id}     a stored photo              (tenant, or landlord link)
+  /reports/{id|all}      printable report            (tenant, or landlord link)
+  /simulator             Alexa+ simulator            (tenant passcode)
   /verify                check the record            (anyone)
 """
 
 import hashlib
 import hmac
+import secrets
 from contextlib import closing
 from pathlib import Path
 
 from fastapi import APIRouter, File, Form, Request, UploadFile
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
 from app import db, models, reports, services
@@ -275,6 +279,58 @@ def report_page(request: Request, issue_id: str, t: str = ""):
         "scope": "All issues" if issue_id == "all" else report["sections"][0]["issue"]["title"],
         "base_url": settings.base_url,
     })
+
+
+# ------------------------------------------------------- Alexa+ simulator
+
+SIM_COOKIE = "fixtrail_sim"
+_simulator = None  # created on first use; tests swap in a fake
+
+
+def get_simulator():
+    global _simulator
+    if _simulator is None:
+        from app.simulator import Simulator
+        _simulator = Simulator()
+    return _simulator
+
+
+@router.get("/simulator", response_class=HTMLResponse)
+def simulator_page(request: Request):
+    """Stands in for Alexa+: the tenant talks, an agent calls FixTrail's MCP tools."""
+    if not is_tenant(request):
+        return _to_login(request)
+    from app.simulator import mode_label
+    response = templates.TemplateResponse(request, "simulator.html", {"mode": mode_label()})
+    if not request.cookies.get(SIM_COOKIE):
+        response.set_cookie(SIM_COOKIE, secrets.token_urlsafe(16), httponly=True, samesite="lax")
+    return response
+
+
+@router.post("/simulator/ask")
+async def simulator_ask(request: Request):
+    if not is_tenant(request):
+        return JSONResponse({"error": "Please log in again."}, status_code=401)
+    body = await request.json()
+    text = str(body.get("text", "")).strip()[:500]
+    if not text:
+        return JSONResponse({"error": "Say or type something first."}, status_code=400)
+    session = request.cookies.get(SIM_COOKIE) or "default"
+    try:
+        # The agent makes blocking calls (to the model and to /mcp), so run it
+        # in a worker thread and keep the server free to answer those calls.
+        result = await run_in_threadpool(get_simulator().ask, session, text)
+    except Exception as error:  # e.g. missing AWS credentials in bedrock mode
+        return JSONResponse({"error": f"The assistant couldn't answer: {error}"}, status_code=502)
+    return JSONResponse(result)
+
+
+@router.post("/simulator/reset")
+def simulator_reset(request: Request):
+    if not is_tenant(request):
+        return JSONResponse({"error": "Please log in again."}, status_code=401)
+    get_simulator().reset(request.cookies.get(SIM_COOKIE) or "default")
+    return JSONResponse({"ok": True})
 
 
 # ------------------------------------------------------------ verify page

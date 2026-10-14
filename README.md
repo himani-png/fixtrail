@@ -252,7 +252,7 @@ A polished, working core beats an ambitious project that's half finished.
 |---|---|---|
 | Phases 1–6: setup, event log + email fingerprints, tools, web pages, reports, Agent Skill + Alexa+ simulator | Photos by email, local version (5b); AWS deploy with real email (7) | Real SES email receiving; real Alexa+ device connection (6d); Ring (8) |
 
-**Progress (October 14, 2026):** Phases 1, 2, 3, 4, 5, and 5b are done and committed (74 tests passing). Next: Phase 6 (Agent Skill and Alexa+ simulator).
+**Progress (October 14, 2026):** Phases 1–5b and Phase 6a–6b are done (98 tests passing). The simulator works end to end in offline mode; Phase 6c (Amazon Bedrock) is written and waits only for an AWS account.
 
 **About Phase 1.5:** the hackathon's Resources page allows simulating Alexa+ with a web app, so the real-Alexa+ smoke test below is now optional reference material (Phase 6d), not a blocker.
 

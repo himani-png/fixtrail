@@ -24,10 +24,12 @@
     body { margin: 0; background: var(--bg); color: var(--text);
            font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
     header { background: var(--card); border-bottom: 1px solid var(--line); }
-    header .wrap { display: flex; align-items: center; justify-content: space-between; padding-top: 12px; padding-bottom: 12px; }
+    header .wrap { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap;
+                   gap: 6px 16px; padding-top: 12px; padding-bottom: 12px; }
     .brand { font-weight: 700; font-size: 1.15rem; color: var(--text); text-decoration: none; }
     .brand span { color: var(--accent); }
-    nav a { color: var(--muted); text-decoration: none; margin-left: 16px; font-size: .95rem; }
+    nav { display: flex; flex-wrap: wrap; gap: 4px 16px; }
+    nav a { color: var(--muted); text-decoration: none; font-size: .95rem; white-space: nowrap; }
     nav a:hover { color: var(--text); }
     .wrap { max-width: 780px; margin: 0 auto; padding-left: 16px; padding-right: 16px; }
     main { padding-top: 24px; padding-bottom: 48px; }
@@ -79,7 +81,7 @@
   <header>
     <div class="wrap">
       <a class="brand" href="/">Fix<span>Trail</span></a>
-      <nav>{% block nav %}<a href="/">Issues</a><a href="/verify">Verify record</a>{% endblock %}</nav>
+      <nav>{% block nav %}<a href="/">Issues</a><a href="/simulator">Simulator</a><a href="/verify">Verify record</a>{% endblock %}</nav>
     </div>
   </header>
   <main class="wrap">
