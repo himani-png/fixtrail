@@ -173,6 +173,12 @@ def test_history_finds_closed_issues_too(conn, mailer):
     assert "closed" in services.get_issue_history(conn, "sink")
 
 
+def test_dates_are_easy_to_say():
+    assert models.nice_date("2026-10-20 14:30") == "Tuesday, October 20 at 2:30 PM"
+    assert models.nice_date("2026-10-20") == "Tuesday, October 20"
+    assert models.nice_date("2026-10-20", with_year=True) == "Tuesday, October 20, 2026"
+
+
 def test_status_is_derived_from_events():
     events = [{"type": t} for t in ["issue_reported", "landlord_scheduled", "landlord_comment"]]
     assert models.derive_status(events) == "scheduled"
@@ -187,7 +193,7 @@ def anyio_backend():
 
 @pytest.mark.anyio
 async def test_tools_work_over_mcp(tmp_path, monkeypatch, mailer):
-    monkeypatch.setattr(mcp_tools, "DATABASE_PATH", str(tmp_path / "mcp.db"))
+    monkeypatch.setattr(db, "DEFAULT_PATH", str(tmp_path / "mcp.db"))
 
     async with Client(mcp_tools.mcp) as client:
         names = {tool.name for tool in (await client.list_tools()).tools}

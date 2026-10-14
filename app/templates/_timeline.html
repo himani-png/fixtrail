@@ -1,0 +1,19 @@
+<ol class="timeline">
+  {% for row in timeline %}
+  <li>
+    <div class="row">
+      <strong>{{ row.text }}</strong>
+      <span class="badge b-{{ row.verification }}">{{ row.label }}</span>
+    </div>
+    <div class="meta">Event #{{ row.id }} · {{ row.when }} · by {{ row.actor }}</div>
+    {% if row.photo_url %}<img src="{{ row.photo_url }}" alt="Photo for event #{{ row.id }}" loading="lazy">{% endif %}
+    <details>
+      <summary>Details</summary>
+      {% for name, value in row.details %}<div>{{ name }}: <code>{{ value }}</code></div>{% endfor %}
+      <div>Record fingerprint after this event: <code>{{ row.hash }}</code></div>
+    </details>
+  </li>
+  {% else %}
+  <li>No events yet.</li>
+  {% endfor %}
+</ol>

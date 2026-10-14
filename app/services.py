@@ -5,11 +5,13 @@ Each one takes a database connection and returns a short sentence that
 Alexa can read aloud.
 """
 
+import hashlib
 import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from datetime import date
 
-from app import db, models
+from app import db, models, photos
 from app.config import settings
 from app.mailer import Mailer, get_mailer
 
@@ -75,10 +77,11 @@ def _plural(n: int, word: str) -> str:
 
 
 def _landlord_phrase(event: dict) -> str:
-    phrase = models.LANDLORD_EVENT_PHRASES.get(event["type"], "responded")
+    """'acknowledged it 2 days ago' / 'scheduled a repair for Tuesday, October 20 at 10:00 AM'."""
     if event["type"] == "landlord_scheduled" and event["payload"].get("date"):
-        phrase += f" for {event['payload']['date']}"
-    return phrase
+        return f"scheduled a repair for {models.nice_date(event['payload']['date'])}"
+    phrase = models.LANDLORD_EVENT_PHRASES.get(event["type"], "responded")
+    return f"{phrase} {models.ago(models.days_since(event['created_at']))}"
 
 
 # --------------------------------------------------------------- emails
@@ -257,7 +260,7 @@ def list_open_issues(conn) -> str:
         landlord_events = [e for e in events if e["actor"] == "landlord"]
         if landlord_events:
             last = landlord_events[-1]
-            response = f"your landlord {_landlord_phrase(last)} {models.ago(models.days_since(last['created_at']))}"
+            response = f"your landlord {_landlord_phrase(last)}"
         else:
             response = "no landlord response yet"
         if issue["status"] == "disputed":
@@ -288,8 +291,7 @@ def get_issue_history(conn, issue_query: str) -> str:
     landlord_events = [e for e in events if e["actor"] == "landlord"]
     if landlord_events:
         last = landlord_events[-1]
-        sentences.append(f"Most recently, your landlord {_landlord_phrase(last)} "
-                         f"{models.ago(models.days_since(last['created_at']))}.")
+        sentences.append(f"Most recently, your landlord {_landlord_phrase(last)}.")
     else:
         sentences.append("Your landlord hasn't responded yet.")
 
@@ -347,3 +349,100 @@ def dispute_fix(conn, issue_query: str, reason: str) -> str:
     _refresh_status(conn, issue["id"])
     _queue_landlord_email(conn, issue["id"], "disputed", reason)
     return f"I've recorded that {_name(issue)} still isn't fixed, and I'm telling your landlord."
+
+
+# -------------------------------------------- landlord responses (web)
+
+class ActionError(ValueError):
+    """A problem the person can fix, e.g. 'pick a date'. Shown on the page."""
+
+
+LANDLORD_ACTIONS = {
+    # action: (event type, verification)
+    "acknowledge": ("landlord_acknowledged", "verified"),
+    "schedule": ("landlord_scheduled", "verified"),
+    "mark_fixed": ("landlord_marked_fixed", "verified"),
+    "comment": ("landlord_comment", "verified"),
+    # FixTrail didn't see the visit, so this is the landlord's own claim.
+    "access_issue": ("access_issue", "landlord_reported"),
+}
+
+
+def landlord_respond(conn, issue_id: str, action: str, when: str | None = None,
+                     time: str | None = None, note: str | None = None) -> str:
+    """Record a landlord's button click and tell the tenant. Returns a
+    confirmation message for the page."""
+    if action not in LANDLORD_ACTIONS:
+        raise ActionError("Unknown action.")
+    event_type, verification = LANDLORD_ACTIONS[action]
+    note = (note or "").strip()
+
+    payload = {}
+    if action == "schedule":
+        try:
+            day = date.fromisoformat(when or "")
+        except ValueError:
+            raise ActionError("Please pick a date for the repair.")
+        payload["date"] = day.isoformat() + (f" {time}" if time else "")
+    if action == "comment" and not note:
+        raise ActionError("Please write a comment first.")
+    if note:
+        payload["note"] = note[:2000]
+
+    event = db.append_event(conn, issue_id, event_type, "landlord", verification, payload)
+    _refresh_status(conn, issue_id)
+    _later(_email_tenant_update, db.database_path(conn), issue_id, event["id"])
+    return "Thanks. Your response is recorded and the tenant has been notified."
+
+
+def _email_tenant_update(db_path: str, issue_id: str, event_id: int) -> None:
+    """Every landlord response goes straight to the tenant, too."""
+    conn = db.connect(db_path)
+    try:
+        issue = db.get_issue(conn, issue_id)
+        prop = db.get_or_create_property(conn)
+        event = next(e for e in db.list_events(conn, issue_id) if e["id"] == event_id)
+        body = (
+            f"Hi {prop['tenant_name']},\n\n"
+            f"Update on: {issue['title']}\n"
+            f"{models.describe_event(event)}.\n\n"
+            f"See the full timeline: {settings.base_url}/issues/{issue_id}\n"
+            + fingerprint_footer(conn)
+        )
+        _mailer().send(prop["tenant_email"], f"Update on: {issue['title']}", body)
+    finally:
+        conn.close()
+
+
+# ------------------------------------------------------------- photos
+
+def add_photo(conn, issue_id: str, filename: str, data: bytes,
+              source: str = "web_upload", extra: dict | None = None) -> dict:
+    """Store a photo and log it with its fingerprint (sha256).
+
+    The verified time is when FixTrail received the file, not any date
+    stored inside the photo, which a phone can get wrong.
+    """
+    if not data:
+        raise ActionError(f"{filename or 'The file'} is empty.")
+    max_bytes = settings.max_photo_mb * 1024 * 1024
+    if len(data) > max_bytes:
+        raise ActionError(f"{filename} is larger than {settings.max_photo_mb} MB.")
+    detected = photos.detect_image_type(data)
+    if detected is None:
+        raise ActionError(f"{filename} isn't a JPEG or PNG photo.")
+    content_type, ext = detected
+
+    sha256 = hashlib.sha256(data).hexdigest()
+    key = photos.make_key(issue_id, sha256, ext)
+    photos.get_store().save(key, data)
+    payload = {
+        "key": key,
+        "sha256": sha256,
+        "size": len(data),
+        "content_type": content_type,
+        "source": source,
+        "original_filename": (filename or "")[:200],
+        **(extra or {}),
+    }
+    return db.append_event(conn, issue_id, "photo_added", "tenant", "verified", payload)

@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}Repair request: {{ issue.title }} · FixTrail{% endblock %}
+{% block nav %}<a href="/verify">Verify record</a>{% endblock %}
+
+{% block content %}
+{% if message %}<div class="notice ok">{{ message }}</div>{% endif %}
+{% if error %}<div class="notice bad">{{ error }}</div>{% endif %}
+
+<p class="muted small">Repair request for {{ property.address }}, from {{ property.tenant_name }}</p>
+<div class="row">
+  <h1>{{ issue.title }}</h1>
+  <span class="badge b-{{ issue.status }}">{{ issue.status_label }}</span>
+</div>
+<p class="muted">
+  {{ issue.location }} · {{ issue.urgency }} · reported {{ issue.reported }}
+  {% if issue.status != "closed" %}· open {{ issue.days_open }}{% endif %}
+</p>
+
+{% if issue.status != "closed" %}
+<h2>Respond</h2>
+<p class="muted small">Each response is added to the shared record, with the time, and emailed to the tenant.</p>
+<div class="actions">
+  <form method="post" class="card">
+    <input type="hidden" name="action" value="acknowledge">
+    <p class="small muted">Let the tenant know you've seen this. You can schedule the repair later.</p>
+    <button type="submit">Acknowledge</button>
+  </form>
+
+  <form method="post" class="card">
+    <input type="hidden" name="action" value="schedule">
+    <label for="when">Repair date</label>
+    <input id="when" type="date" name="when" required>
+    <label for="time">Time (optional)</label>
+    <input id="time" type="time" name="time">
+    <p></p>
+    <button type="submit">Schedule repair</button>
+  </form>
+
+  <form method="post" class="card">
+    <input type="hidden" name="action" value="mark_fixed">
+    <label for="fixed-note">Note (optional)</label>
+    <input id="fixed-note" type="text" name="note" placeholder="e.g. Replaced the valve">
+    <p></p>
+    <button type="submit">Mark fixed</button>
+  </form>
+
+  <form method="post" class="card">
+    <input type="hidden" name="action" value="access_issue">
+    <label for="access-note">What happened? (optional)</label>
+    <input id="access-note" type="text" name="note" placeholder="e.g. Nobody answered at 10am">
+    <p class="small muted">Recorded as your report, since FixTrail can't see the visit.</p>
+    <button type="submit" class="secondary">Couldn't get access</button>
+  </form>
+</div>
+
+<form method="post" class="card">
+  <input type="hidden" name="action" value="comment">
+  <label for="comment">Add a comment</label>
+  <textarea id="comment" name="note" required></textarea>
+  <p></p>
+  <button type="submit" class="secondary">Add comment</button>
+</form>
+{% endif %}
+
+<h2>Shared record</h2>
+<p class="muted small">You and the tenant see the same timeline. Entries can't be edited or deleted.</p>
+{% include "_timeline.html" %}
+{% endblock %}

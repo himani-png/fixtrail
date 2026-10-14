@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Add photos · FixTrail{% endblock %}
+{% block nav %}<a href="/">Issues</a><a href="/verify">Verify record</a><a href="/logout">Log out</a>{% endblock %}
+
+{% block content %}
+<p class="small"><a href="/issues/{{ issue.id }}">← Back to {{ issue.title }}</a></p>
+<h1>Add photos</h1>
+<p class="muted">{{ issue.title }} · {{ issue.location }}</p>
+
+{% if error %}<div class="notice bad">{{ error }}</div>{% endif %}
+
+<form class="card" method="post" enctype="multipart/form-data">
+  <label for="files">Photos (JPEG or PNG, up to {{ max_mb }} MB each)</label>
+  <input id="files" type="file" name="files" accept="image/jpeg,image/png" multiple required>
+  <p class="muted small">
+    FixTrail records each photo's fingerprint and the time it was received.
+    The recorded time is when FixTrail got the photo, not the date saved inside it.
+  </p>
+  <button type="submit">Upload</button>
+</form>
+{% endblock %}

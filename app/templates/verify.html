@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Verify the record · FixTrail{% endblock %}
+
+{% block content %}
+<h1>Verify the record</h1>
+<p class="muted">FixTrail's record is a chain: each event's fingerprint depends on every event before it,
+so changing anything in the past breaks the chain.</p>
+
+{% if chain.ok %}
+<div class="card">
+  <div class="big" style="color: var(--ok)">✓ Record intact</div>
+  <p>All {{ chain.count }} events check out.
+  {% if latest %}Latest fingerprint (after event #{{ latest[0] }}):<br><code>{{ latest[1] }}</code>{% endif %}</p>
+</div>
+{% else %}
+<div class="card">
+  <div class="big" style="color: var(--bad)">✗ Record broken at event #{{ chain.broken_at }}</div>
+  <p>{{ chain.reason|capitalize }}.</p>
+</div>
+{% endif %}
+
+<h2>Check a fingerprint from an old email</h2>
+<p class="muted small">Every FixTrail email ends with the record's fingerprint at that moment. Those emails sit in
+the tenant's and landlord's inboxes, where FixTrail can't change them. Paste one here to confirm the record
+still matches what was sent.</p>
+
+{% if check %}
+<div class="notice {{ 'ok' if check.match else 'bad' }}">
+  {{ "✓ Match" if check.match else "✗ No match" }}: {{ check.reason }}.
+</div>
+{% endif %}
+
+<form class="card" method="post">
+  <label for="event_id">Event number (from “Record fingerprint after event #…”)</label>
+  <input id="event_id" type="text" name="event_id" inputmode="numeric" value="{{ event_id }}" placeholder="e.g. 14" required>
+  <label for="fingerprint">Full fingerprint</label>
+  <input id="fingerprint" type="text" name="fingerprint" value="{{ fingerprint }}" placeholder="64 characters" required>
+  <p></p>
+  <button type="submit">Check fingerprint</button>
+</form>
+{% endblock %}

@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Your repair issues · FixTrail{% endblock %}
+{% block nav %}<a href="/">Issues</a><a href="/verify">Verify record</a><a href="/logout">Log out</a>{% endblock %}
+
+{% macro issue_card(issue) %}
+<a class="card" href="/issues/{{ issue.id }}">
+  <div class="row">
+    <strong>{{ issue.title }}</strong>
+    <span class="badge b-{{ issue.status }}">{{ issue.status_label }}</span>
+  </div>
+  <div class="muted small">
+    {{ issue.location }} · reported {{ issue.reported }}
+    {% if issue.status != "closed" %}· open {{ issue.days_open }}{% endif %}
+    · {{ issue.landlord_responses }} landlord response{{ "" if issue.landlord_responses == 1 else "s" }}
+    {% if issue.photo_count %}· {{ issue.photo_count }} photo{{ "" if issue.photo_count == 1 else "s" }}{% endif %}
+  </div>
+</a>
+{% endmacro %}
+
+{% block content %}
+<h1>Your repair issues</h1>
+<p class="muted">{{ property.address }} · landlord: {{ property.landlord_name }}</p>
+
+{% if chain.ok %}
+<div class="notice ok">Record intact: all {{ chain.count }} events check out. <a href="/verify">Details</a></div>
+{% else %}
+<div class="notice bad">Record problem at event #{{ chain.broken_at }}: {{ chain.reason }}. <a href="/verify">Details</a></div>
+{% endif %}
+
+<h2>Open ({{ open_issues|length }})</h2>
+{% for issue in open_issues %}{{ issue_card(issue) }}{% else %}
+<p class="muted">No open issues. Report one by saying “Alexa, the kitchen sink is leaking.”</p>
+{% endfor %}
+
+{% if closed_issues %}
+<h2>Closed ({{ closed_issues|length }})</h2>
+{% for issue in closed_issues %}{{ issue_card(issue) }}{% endfor %}
+{% endif %}
+{% endblock %}

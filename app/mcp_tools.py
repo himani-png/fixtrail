@@ -15,8 +15,6 @@ from mcp.server.mcpserver import MCPServer
 
 from app import db, services
 
-DATABASE_PATH: str | None = None  # None = use the path from .env; tests override
-
 mcp = MCPServer(
     name="FixTrail",
     instructions=(
@@ -32,7 +30,7 @@ IssueRef = Annotated[str, Field(description="Which issue, in the tenant's words,
 
 
 def _conn():
-    return closing(db.connect(DATABASE_PATH))
+    return closing(db.connect())
 
 
 @mcp.tool()

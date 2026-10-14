@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Log in · FixTrail{% endblock %}
+{% block nav %}<a href="/verify">Verify record</a>{% endblock %}
+
+{% block content %}
+<h1>Tenant login</h1>
+<p class="muted">Enter the passcode to see your repair issues.</p>
+{% if error %}<div class="notice bad">{{ error }}</div>{% endif %}
+<form class="card" method="post" action="/login">
+  <input type="hidden" name="next" value="{{ next }}">
+  <label for="passcode">Passcode</label>
+  <input id="passcode" type="password" name="passcode" autofocus required>
+  <p></p>
+  <button type="submit">Log in</button>
+</form>
+{% endblock %}

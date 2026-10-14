@@ -53,6 +53,74 @@ STOPWORDS = {
 }
 
 
+STATUS_LABELS = {
+    "open": "Open",
+    "acknowledged": "Acknowledged",
+    "scheduled": "Repair scheduled",
+    "landlord_marked_fixed": "Landlord says fixed",
+    "closed": "Closed",
+    "disputed": "Disputed",
+}
+
+VERIFICATION_LABELS = {
+    "verified": "Verified",
+    "tenant_reported": "Tenant-reported (unverified)",
+    "landlord_reported": "Landlord-reported (unverified)",
+}
+
+
+def nice_date(value: str, with_year: bool = False) -> str:
+    """'2026-10-20 10:00' -> 'Tuesday, October 20 at 10:00 AM' (easy to say aloud)."""
+    for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d"):
+        try:
+            moment = datetime.strptime(value, fmt)
+            break
+        except (TypeError, ValueError):
+            continue
+    else:
+        return value or "an unspecified date"
+    text = f"{moment:%A}, {moment:%B} {moment.day}" + (f", {moment.year}" if with_year else "")
+    if fmt.endswith("%M"):
+        hour = moment.hour % 12 or 12
+        text += f" at {hour}:{moment.minute:02d} {'AM' if moment.hour < 12 else 'PM'}"
+    return text
+
+
+def describe_event(event: dict) -> str:
+    """One plain-English line for the timeline."""
+    p = event["payload"]
+    kind = event["type"]
+    note = f": “{p['note']}”" if p.get("note") else ""
+    if kind == "issue_reported":
+        return f"Tenant reported: {p.get('title')} ({p.get('location')}, {p.get('urgency', 'routine')})"
+    if kind == "landlord_notified":
+        return f"FixTrail emailed the landlord: “{p.get('subject')}”"
+    if kind == "follow_up_sent":
+        return f"FixTrail sent the landlord a reminder: “{p.get('subject')}”"
+    if kind == "tenant_contact_claimed":
+        return f"Tenant says they contacted the landlord by {p.get('method')}{note}"
+    if kind == "photo_added":
+        via = "email" if p.get("source") == "email_reply" else "web upload"
+        return f"Photo added via {via}"
+    if kind == "landlord_acknowledged":
+        return f"Landlord acknowledged the issue{note}"
+    if kind == "landlord_scheduled":
+        return f"Landlord scheduled a repair for {nice_date(p.get('date'), with_year=True)}{note}"
+    if kind == "landlord_marked_fixed":
+        return f"Landlord marked the issue fixed{note}"
+    if kind == "landlord_comment":
+        return f"Landlord commented{note}"
+    if kind == "access_issue":
+        return f"Landlord says they couldn't get access{note}"
+    if kind == "tenant_confirmed_fixed":
+        return "Tenant confirmed the repair is done"
+    if kind == "tenant_disputed_fix":
+        return f"Tenant says it's not fixed: “{p.get('reason')}”"
+    if kind == "repair_visit_detected":
+        return "A visitor was detected at the door during the repair window"
+    return kind.replace("_", " ").capitalize()
+
+
 def derive_status(events: list[dict]) -> str:
     """Work out the current status from the events (the source of truth)."""
     status = "open"

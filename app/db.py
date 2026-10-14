@@ -102,9 +102,12 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+DEFAULT_PATH: str | None = None  # tests point this at a temporary file
+
+
 def connect(path: str | None = None) -> sqlite3.Connection:
     """Open the database and make sure all tables exist."""
-    conn = sqlite3.connect(path or settings.database_path, isolation_level=None)
+    conn = sqlite3.connect(path or DEFAULT_PATH or settings.database_path, isolation_level=None)
     conn.row_factory = sqlite3.Row  # rows behave like dicts: row["title"]
     conn.execute("PRAGMA foreign_keys = ON")
     conn.executescript(SCHEMA)
