@@ -39,3 +39,23 @@
 - Severity: medium
 - Workaround: Read all four pages and check details at office hours.
 - Suggestion for Amazon: A single "minimal add-on" checklist that separates required from optional steps, plus a clear access path for hackathon participants.
+
+### Entry 5: Unclear whether an Alexa+ simulation satisfies the demo requirement
+- Tool/API/SDK: Hackathon Resources page, Alexa+ track
+- Task attempted: Decide how to show FixTrail working with Alexa+ in the demo video.
+- Steps taken: Read the Resources page and the submission requirements.
+- Expected: One clear statement of what counts as "working with Alexa+".
+- Actually happened: The Resources page says "You can simulate an Alexa+ experience using your preferred agentic tools via a web app", while the submission requirements ask for a video "showing the MCP server working with Alexa+". Meanwhile the Alexa+ MCP Toolkit docs say it is "available to select partners only", with no access path described for participants.
+- Severity: high
+- Workaround: Build a web-app simulator that acts as the MCP client (Strands Agents SDK + Bedrock), and ask at office hours to confirm it's acceptable.
+- Suggestion for Amazon: State plainly on the Resources and submission pages whether a simulation is acceptable, and if real Alexa+ is preferred, explain how participants get toolkit access.
+
+### Entry 6: AWS credits ran out partway through the hackathon
+- Tool/API/SDK: Hackathon AWS credit codes
+- Task attempted: Plan AWS usage (Bedrock, SES, S3) for the AWS Builder mini challenge.
+- Steps taken: Checked the Resources page for credits.
+- Expected: Credits available for the whole hackathon window, or a clear cap announced up front.
+- Actually happened: "October 7th Update: Unfortunately, we are out of credit codes and are no longer accepting credit requests." Later participants must pay for AWS usage themselves, which is a barrier for students.
+- Severity: medium
+- Workaround: Use free-tier options, small Bedrock models, and a billing alert; design so everything runs locally without AWS.
+- Suggestion for Amazon: Reserve credits for registered participants, or list which AWS Builder services stay within the free tier.

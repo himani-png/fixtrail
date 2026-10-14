@@ -1,9 +1,10 @@
 # FixTrail — A Trusted, Shared Repair Record for Renters and Landlords
 
 > **Hackathon:** Amazon Developer Hackathon
-> **Primary track:** Alexa+ (self-hosted MCP server)
-> **Mini challenge:** AWS Builder (built with Kiro, uses AWS SES + S3)
-> **Optional stretch:** Ring integration (repair-visit evidence via Ring simulator)
+> **Primary track:** Alexa+ (self-hosted MCP server over Streamable HTTP, plus an Agent Skill and an Alexa+ simulator web app)
+> **Mini challenge:** AWS Builder (Amazon Bedrock + Strands Agents SDK power the simulator; SES + S3 in production)
+> **Optional stretch:** Ring integration (repair-visit evidence via Ring APIs)
+> **Built with:** Claude Code
 
 ---
 
@@ -14,12 +15,20 @@ You are helping a **first-time developer** build this project for a hackathon. P
 1. **Work phase by phase** (see Section 8). Finish one phase, run its checks, and explain what you did in plain language before moving on.
 2. **Explain as you go.** The developer is new to Python, MCP, and AWS. Briefly explain each new concept, command, and file.
 3. **Verify, don't assume.** Before writing MCP code, check the current official MCP Python SDK docs and confirm the installed version supports **MCP spec 2025-11-25 or later** and the **Streamable HTTP** transport. If the SDK API differs from examples in this file, follow the real SDK.
-4. **Check the hackathon's Alexa+ resources** for how to connect a self-hosted MCP server to Alexa+. Do not invent a connection method. If it's unclear, tell the developer to ask at hackathon office hours.
+4. **Follow the hackathon's Alexa+ resources** (summarized in "Hackathon resources" below). They allow simulating Alexa+ with a web app; a real Alexa+ connection is optional. Do not invent a connection method. If something is unclear, tell the developer to ask at hackathon office hours.
 5. **Never commit secrets.** Use a `.env` file (listed in `.gitignore`) and provide `.env.example`.
 6. **Ask before** creating AWS resources, spending money, or deploying.
 7. **Keep it simple.** Prefer fewer dependencies and readable code over clever code.
 8. **Keep a friction log** (Section 11) whenever something is confusing, broken, or poorly documented. It earns up to a 10% judging bonus.
 9. **Read the design review** (Section 16). It explains why key design choices exist, such as the honest labels and email fingerprints. Don't remove or weaken them.
+
+### Hackathon resources (what the official Resources page says)
+- **Alexa+ track:** "Build a working MCP (Model Context Protocol) integration on the open standards for Agent Skills and Streamable HTTP transports. You can simulate an Alexa+ experience using your preferred agentic tools via a web app." So the deliverables are: (1) the MCP server over Streamable HTTP, (2) an Agent Skill following the [Agent Skills](https://agentskills.io/) standard (a folder with a `SKILL.md`), and (3) a web app that simulates Alexa+.
+- **AWS Builder mini challenge:** "incorporate AWS services with documented integrations: Amazon Bedrock, AgentCore, the Strands SDK, Kiro, SageMaker, and more. The AWS free tier is enough to get started."
+- **Open Source mini challenge (optional):** contribute to any open-source repository during the hackathon window.
+- **AWS credits:** "October 7th Update: we are out of credit codes." Any AWS cost is on the developer's own account, so keep usage small and set a billing alert.
+- **Live office hours:** schedule and join link are on the hackathon landing page.
+- **Open question for office hours:** is a web-app simulation of Alexa+ acceptable for the demo video, or must it show the real Alexa+? (The Resources page suggests simulation is fine.)
 
 ---
 
@@ -74,7 +83,13 @@ FixTrail is a **neutral, shared, tamper-evident repair record**.
                                               |-- Photos: local folder (local) / AWS S3 (prod)
 
  Tenant's email app --(reply with photo)--> SES receiving --> FixTrail inbound handler --> Event log
+
+ Alexa+ simulator (web page /simulator)
+   mic (browser speech recognition) --> Strands agent + Amazon Bedrock model + FixTrail Agent Skill
+        --(MCP over Streamable HTTP)--> FixTrail /mcp --> spoken reply (browser speech synthesis)
 ```
+
+The simulator stands in for Alexa+ exactly where Alexa+ would sit: it is an MCP client that discovers FixTrail's tools and calls them. A real Alexa+ connection, if access becomes available, uses the same `/mcp` endpoint.
 
 **One server, two faces:**
 
@@ -129,7 +144,7 @@ Issue `status` is **derived from events**. It is a cached convenience, and event
 | issue_id | text | |
 | type | text | see list below |
 | actor | text | tenant, landlord, system |
-| verification | text | verified or tenant_reported |
+| verification | text | verified, tenant_reported, or landlord_reported |
 | payload | text (JSON) | details, e.g. message text, photo hash |
 | created_at | text | **server** UTC timestamp, never client-supplied |
 | prev_hash | text | hash of the previous event |
@@ -142,15 +157,20 @@ Issue `status` is **derived from events**. It is a cached convenience, and event
 - `tenant_contact_claimed`: tenant says they called or texted (tenant_reported)
 - `photo_added`: payload stores the S3/local key, the **sha256 of the image file**, and `source` (`web_upload` or `email_reply`). For email photos, also store the sender address, the email's Message-ID, and the SES spam/authentication verdicts. If the image has an EXIF "taken at" date, store it as extra info, but the **verified time is always the server's receipt time**.
 - `landlord_acknowledged`, `landlord_scheduled` (payload: date/time), `landlord_marked_fixed`, `landlord_comment`
-- `access_issue`: landlord reports they couldn't get in (landlord's claim, labeled as such)
+- `access_issue`: landlord reports they couldn't get in (labeled `landlord_reported`)
 - `tenant_confirmed_fixed`, `tenant_disputed_fix`
 
-### `landlord_tokens`
+### `tokens`
 | field | type | notes |
 |---|---|---|
-| token | text | long random secret used in the landlord's link |
+| token | text | long random secret (about 256 bits) |
 | issue_id | text | |
+| purpose | text | `landlord` (the `/respond/{token}` link) or `photo_reply` (the `photos+{token}@domain` Reply-To address) |
 | created_at | text | |
+
+One table serves both kinds of secret link. A token only works for its own purpose, so a landlord link can't be used to email in photos, and vice versa.
+
+**Verification labels follow one rule:** `verified` means FixTrail itself witnessed the act (it received the report or photo, sent the email, or recorded the landlord's click). `tenant_reported` and `landlord_reported` mean someone described something FixTrail could not see, such as a phone call or a visit where nobody answered the door.
 
 ### Tamper-evidence rules
 - The app code **never** runs `UPDATE` or `DELETE` on `events`. Enforce this in the data-access layer, and add a SQLite trigger that blocks updates and deletes on `events`.
@@ -230,9 +250,11 @@ A polished, working core beats an ambitious project that's half finished.
 
 | Must have (the demo depends on it) | Nice to have | Skip unless ahead of schedule |
 |---|---|---|
-| Phases 1–6: setup, event log + email fingerprints, tools, web pages, reports, Alexa+ connection | Photos by email, local version (5b); AWS deploy (7) | Real SES email receiving; Ring (8) |
+| Phases 1–6: setup, event log + email fingerprints, tools, web pages, reports, Agent Skill + Alexa+ simulator | Photos by email, local version (5b); AWS deploy with real email (7) | Real SES email receiving; real Alexa+ device connection (6d); Ring (8) |
 
-**De-risk Alexa+ early:** the least certain part of the project is connecting a self-hosted MCP server to Alexa+. Do the **Phase 1.5 smoke test** right after Phase 1, before building anything else.
+**Progress (October 14, 2026):** Phases 1, 2, 3, 4, 5, and 5b are done and committed (74 tests passing). Next: Phase 6 (Agent Skill and Alexa+ simulator).
+
+**About Phase 1.5:** the hackathon's Resources page allows simulating Alexa+ with a web app, so the real-Alexa+ smoke test below is now optional reference material (Phase 6d), not a blocker.
 
 ### Phase 1: Setup and "hello world" MCP server
 - Create the repo structure (Section 9), virtual environment, `requirements.txt`, `.gitignore`, `.env.example`, `LICENSE` (MIT).
@@ -242,8 +264,8 @@ A polished, working core beats an ambitious project that's half finished.
 - **Check:** Connect with **MCP Inspector**, list tools, call `ping`.
 - **Explain to developer:** What MCP is, what a "tool" is, what Streamable HTTP means.
 
-### Phase 1.5: Alexa+ smoke test (do this early)
-Verified against Amazon's Alexa+ add-on docs (October 2026). Official pages: [Docs home](https://developer.amazon.com/docs/alexaplus/add-ons/home.html), [Set up your environment](https://developer.amazon.com/docs/alexaplus/add-ons/set-up-your-development-environment.html), [MCP QuickStart](https://developer.amazon.com/docs/alexaplus/add-ons/mcp-toolkit-quickstart.html), [Authentication](https://developer.amazon.com/docs/alexaplus/add-ons/mcp-toolkit-authentication.html), [Account linking](https://developer.amazon.com/docs/alexaplus/add-ons/mcp-toolkit-account-linking.html).
+### Phase 1.5: Real Alexa+ connection (optional reference for Phase 6d)
+Only needed if the team gets real Alexa+ access. Verified against Amazon's Alexa+ add-on docs (October 2026). Official pages: [Docs home](https://developer.amazon.com/docs/alexaplus/add-ons/home.html), [Set up your environment](https://developer.amazon.com/docs/alexaplus/add-ons/set-up-your-development-environment.html), [MCP QuickStart](https://developer.amazon.com/docs/alexaplus/add-ons/mcp-toolkit-quickstart.html), [Authentication](https://developer.amazon.com/docs/alexaplus/add-ons/mcp-toolkit-authentication.html), [Account linking](https://developer.amazon.com/docs/alexaplus/add-ons/mcp-toolkit-account-linking.html).
 
 **Prerequisites (sort these out first):**
 - **Access.** The docs say the MCP Toolkit is "available to select partners only," and setup uses an AWS account registered with an Alexa Solutions Architect plus a private npm registry (CodeArtifact). Ask the hackathon organizers how participants get access.
@@ -259,9 +281,9 @@ Verified against Amazon's Alexa+ add-on docs (October 2026). Official pages: [Do
 5. Deploy with `alexa-ai deploy`, then test in the Alexa+ web simulator. Run `alexa-ai deploy` again whenever tools change, because Alexa+ refreshes tool info only on deploy.
 
 - **Check:** Alexa+ calls `ping` successfully.
-- **If it doesn't work yet:** write a friction log entry, ask at office hours, and continue with Phase 2. Knowing about the problem early is the whole point.
+- **If it doesn't work:** write a friction log entry, ask at office hours, and rely on the simulator (Phase 6b–6c).
 
-**Requirements that affect the whole design:**
+**Requirements that affect the whole design (already followed, so a real connection stays possible):**
 - **Spec and transport:** MCP spec 2025-11-25 over Streamable HTTP (Phase 1 already does this).
 - **Speed:** responses must come back in **under 500 ms**. Tools must never wait on slow work, so send emails in the background after replying.
 - **Account linking (OAuth 2.1 with PKCE S256) is optional in the docs,** but recommended when tools access user-specific data or take actions for the user, which FixTrail does. Plan: run the smoke test without it, then add it in Phase 6 if time allows (the single-tenant demo works without it). If added, the server must:
@@ -304,12 +326,29 @@ Verified against Amazon's Alexa+ add-on docs (October 2026). Official pages: [Do
 - **Check:** Save a sample reply email with a photo as an `.eml` file, run the ingest script, and see the photo appear on the issue timeline labeled "via email." Test that emails from the wrong sender or with a bad token are rejected.
 - Production wiring (SES receiving) happens in Phase 7.
 
-### Phase 6: Connect to Alexa+
-- Follow the **hackathon's official Alexa+ documentation** for registering or connecting a self-hosted MCP server. The server must be reachable over public HTTPS.
-- For temporary testing before deploying, a tunneling tool may work. Check whether the hackathon allows or recommends one.
-- Tune tool descriptions and spoken responses based on how Alexa+ actually behaves.
-- **Check:** Complete the Section 3 voice scenarios through Alexa+.
-- **If blocked:** Record the blocker in the friction log and ask at office hours. Meanwhile, continue with Phase 7.
+### Phase 6: Agent Skill and Alexa+ simulator
+The hackathon's Alexa+ track asks for an MCP integration on the open standards for Agent Skills and Streamable HTTP, and allows simulating Alexa+ with a web app.
+
+**6a. Agent Skill** (no AWS needed)
+- `skills/fixtrail/SKILL.md` following the [Agent Skills specification](https://agentskills.io/specification): frontmatter with `name` and `description`, then instructions on when and how to use FixTrail's MCP tools.
+- Cover: voice style (short, speakable answers), passing the tenant's own words as the issue, never inventing facts, and the honest labels (verified vs. tenant-reported).
+- **Check:** the skill passes the reference validator (or a manual check against the spec), and an agent loaded with it handles the Section 3 scenarios.
+
+**6b. Alexa+ simulator page** (no AWS needed)
+- `/simulator`: a microphone button using the browser's built-in speech recognition, spoken replies with the browser's speech synthesis (free in Chrome and Edge), a typed-input fallback, and a chat transcript.
+- Make it clear on the page that it simulates Alexa+.
+- **Check:** works in Chrome and Edge; typed input works in any browser.
+
+**6c. The agent** (needs AWS for Bedrock)
+- A Strands Agents SDK agent using an Amazon Bedrock model, connected to FixTrail's `/mcp` as an MCP client, with the Agent Skill as its instructions.
+- Keep the model small and cheap; credits are no longer available, so costs are on the developer's account.
+- Build and test first with a stand-in model; switch on Bedrock once the AWS account exists. Ask before enabling anything that costs money.
+- **Check:** complete the Section 3 voice scenarios in the simulator.
+
+**6d. Real Alexa+** (optional)
+- Only if access becomes available; see Phase 1.5.
+
+- **Throughout:** tune tool descriptions and spoken responses based on how the agent behaves, and log any friction.
 
 ### Phase 7: AWS deployment (ask developer before creating resources)
 - Choose hosting plus persistent storage (see Section 4 note) and explain the options and costs.
@@ -317,7 +356,8 @@ Verified against Amazon's Alexa+ add-on docs (October 2026). Official pages: [Do
 - Implement `S3PhotoStore`.
 - Set up SES email receiving for photo replies (needs a domain and a supported region; see Section 7b).
 - Containerize with a `Dockerfile`.
-- Document all AWS services used in `docs/AWS.md` (required for the AWS Builder mini challenge).
+- Document all AWS services used in `docs/AWS.md` (required for the AWS Builder mini challenge): Bedrock and Strands (simulator), SES, S3, and hosting.
+- Set a billing alert first. There are no hackathon credits, so prefer free-tier options and small models.
 - **Check:** The public HTTPS URL works, real emails arrive, and photos are stored in S3.
 
 ### Phase 8 (stretch): Ring integration
@@ -342,22 +382,31 @@ fixtrail/
 ├── Dockerfile
 ├── app/
 │   ├── main.py            # FastAPI app; mounts MCP at /mcp
-│   ├── mcp_tools.py       # MCP tool definitions
-│   ├── db.py              # schema, append_event, verify_chain
-│   ├── models.py          # issue status derivation, matching
-│   ├── mailer.py          # Mailer interface, ConsoleMailer, SESMailer
-│   ├── photos.py          # PhotoStore interface, LocalPhotoStore, S3PhotoStore
+│   ├── mcp_tools.py       # MCP tool definitions (thin wrappers)
+│   ├── services.py        # what each action does; shared by tools and web pages
+│   ├── web.py             # web pages: dashboard, timeline, landlord, photos, reports, verify
+│   ├── db.py              # schema, append_event, verify_chain, check_fingerprint
+│   ├── models.py          # status derivation, issue matching, wording
+│   ├── mailer.py          # Mailer interface, ConsoleMailer, SESMailer (Phase 7)
+│   ├── photos.py          # PhotoStore interface, LocalPhotoStore, S3PhotoStore (Phase 7)
 │   ├── inbound_email.py   # checks + processing for photo reply emails
-│   ├── reports.py         # report building
+│   ├── reports.py         # report stats, built only from the event log
+│   ├── simulator.py       # Alexa+ simulator agent: Strands + Bedrock (Phase 6)
 │   ├── config.py          # loads .env
 │   └── templates/         # Jinja2 HTML templates
+├── skills/
+│   └── fixtrail/
+│       └── SKILL.md       # Agent Skill (Phase 6a)
 ├── scripts/
 │   ├── seed.py            # demo property and sample data
+│   ├── try_it.py          # run a voice scenario against a running server
+│   ├── make_test_reply.py # local: create a tenant photo-reply .eml in inbox/
 │   └── ingest_email.py    # local: process .eml files from inbox/
 ├── tests/
 │   ├── test_event_log.py
 │   ├── test_tools.py
-│   └── test_web.py
+│   ├── test_web.py
+│   └── test_inbound_email.py
 └── docs/
     ├── AWS.md
     ├── FRICTION_LOG.md
@@ -370,7 +419,7 @@ fixtrail/
 **Framing:** FixTrail is **evidence for when things go wrong**, not a promise that repairs get done faster. It works even if the landlord never clicks anything, because proof of notice comes from the emails themselves.
 
 1. **0:00–0:20 Hook.** "Repair disputes come down to one question: who told whom, and when? FixTrail keeps a record of that both sides can trust." (Don't use a statistic unless you've verified it.)
-2. **0:20–1:00 Voice flow.** Tenant tells Alexa the heater is broken, the landlord's email arrives (point out the fingerprint footer), then "Alexa, what's still broken?"
+2. **0:20–1:00 Voice flow.** In the Alexa+ simulator (or real Alexa+, if available), the tenant says the heater is broken, the landlord's email arrives (point out the fingerprint footer), then "Alexa, what's still broken?" Say clearly that the simulator stands in for Alexa+ and uses the same MCP endpoint.
 3. **1:00–1:25 Two landlords.** For one issue, the landlord ignores it, and the timeline still shows proof of notice and days unanswered. For another, the landlord schedules a repair, and the record protects them too.
 4. **1:25–2:10 Trust.** Show verified vs. tenant-reported labels and a photo's fingerprint. Then the key moment: rewrite the database and recompute every hash, show `/verify` still passing, paste the fingerprint from an old email, and show it **failing**. "FixTrail can't secretly rewrite history, because both parties hold witnesses."
 5. **2:10–2:40 Report.** "Alexa, make my repair report," then show the clean dated report.
@@ -400,9 +449,11 @@ Add an entry every time something is confusing or broken:
 - [ ] GitHub repo with all source, assets, and run instructions
 - [ ] Repo is **public with an open-source LICENSE**, or private and shared with testing@devpost.com and the Amazon reviewers listed on the **official Devpost page** (verify the list there; add reviewers at submission time, because invites expire after 7 days)
 - [ ] Code actually calls MCP (a real server entry point, not just mentioned in the README)
-- [ ] Demo video under 3 minutes, public on YouTube or Vimeo, in English, showing the MCP server working with Alexa+
-- [ ] Product feedback for every tool used (MCP SDK, Alexa+, Kiro, SES, S3, etc.): what you used it for, what worked, what needs work, onboarding experience, whether you'd use it again
+- [ ] Demo video under 3 minutes, public on YouTube or Vimeo, in English, showing the MCP server working with Alexa+ (confirm at office hours that the Alexa+ simulator is acceptable)
+- [ ] Agent Skill included (`skills/fixtrail/SKILL.md`) and referenced in the description
+- [ ] Product feedback for every tool used (MCP SDK, MCP Inspector, Alexa+ docs, Strands, Bedrock, SES, S3, etc.): what you used it for, what worked, what needs work, onboarding experience, whether you'd use it again
 - [ ] Track: Alexa+. Mini challenge: AWS Builder, with `docs/AWS.md` describing the services used
+- [ ] Optional: Open Source mini challenge (a contribution to any open-source repo during the hackathon window)
 - [ ] Friction log (`docs/FRICTION_LOG.md`) for the up to 10% bonus
 - [ ] Optional: feature requests (critical / important / nice-to-have)
 
@@ -448,7 +499,7 @@ FixTrail convincingly solves one specific, real problem: **"Who told whom, and w
 
 | Judging criterion | Why FixTrail scores well |
 |---|---|
-| **Tech implementation** | A real MCP server (Streamable HTTP) called by Alexa+. A hash-chained, append-only event log enforced by database triggers. Fingerprints anchored outside the system in emails. Real AWS services: SES for email, S3 for photos. |
+| **Tech implementation** | A real MCP server (Streamable HTTP, spec 2025-11-25) with 10 tools, an Agent Skill, and an Alexa+ simulator built on the Strands Agents SDK and Amazon Bedrock. A hash-chained, append-only event log enforced by database triggers. Fingerprints anchored outside the system in emails. AWS services: Bedrock, SES for email, S3 for photos. |
 | **Design** | Voice for the moment a problem happens ("Alexa, the heater stopped working"), web pages for what voice does badly (photos, landlord replies, reports), and email as a zero-install channel for both sides. Every interface is used where it fits best. |
 | **Potential impact** | Proof of notice is central to repair disputes, and tenants often need to show the landlord was told before they can pursue remedies (rules vary by place). The record is useful to tenants, landlords, housing inspectors, mediators, and tenant advocates. |
 | **Quality of the idea** | Existing tools each cover one piece: letter senders, landlord-run maintenance portals, or evidence apps that one person keeps privately. FixTrail combines voice capture, automatic notice to the landlord, a **neutral shared record** with honest "verified" vs. "tenant-reported" labels, and fingerprints held by both parties. It treats trust as a design problem instead of assuming every claim is true. |
@@ -469,7 +520,7 @@ FixTrail convincingly solves one specific, real problem: **"Who told whom, and w
 | Landlord never clicks the link | App seems to depend on landlord cooperation | Proof of notice comes from the sent emails themselves. The demo explicitly shows an ignoring landlord |
 | Email sent is not email seen | Notice disputed; spam folders | Stated openly in Limitations. Reminders create repeated notice. Future: certified-mail integration |
 | Some laws or leases require specific notice methods | Users might rely on FixTrail when they shouldn't | Prominent "not legal advice" disclaimer; framed as record-keeping |
-| Scope too big for a first-time builder | Half-finished demo | Must-have / nice-to-have / skip table (Section 8); Alexa+ connection tested early in Phase 1.5 |
+| Scope too big for a first-time builder | Half-finished demo | Must-have / nice-to-have / skip table (Section 8); core finished first (Phases 1–5b done), real Alexa+ access made optional by the simulator |
 
 ### 16.5 What FixTrail does not solve (say this openly)
 - **It proves notice; it doesn't get things fixed.** A landlord who doesn't care can still ignore everything. FixTrail's value is the evidence a tenant brings to a housing inspector, mediator, or court. Pitch it as **"evidence for when things go wrong,"** not "repairs get done faster."
