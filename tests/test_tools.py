@@ -156,6 +156,17 @@ def test_history_summary(conn, mailer):
     assert "1 contact attempt" in speech
 
 
+def test_history_says_email_on_its_way_while_queued(conn, mailer, monkeypatch):
+    queued = []
+    monkeypatch.setattr(services, "_later", lambda job, *args: queued.append((job, args)))
+    services.report_issue(conn, "Heater not working", "living room")
+    assert "on its way" in services.get_issue_history(conn, "heater")
+
+    for job, args in queued:  # now the worker sends them
+        job(*args)
+    assert "emailed once" in services.get_issue_history(conn, "heater")
+
+
 def test_history_finds_closed_issues_too(conn, mailer):
     services.report_issue(conn, "Kitchen sink leaking", "kitchen")
     services.confirm_fixed(conn, "sink")

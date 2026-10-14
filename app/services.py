@@ -6,6 +6,7 @@ Alexa can read aloud.
 """
 
 import logging
+import threading
 from concurrent.futures import ThreadPoolExecutor
 
 from app import db, models
@@ -19,6 +20,11 @@ log = logging.getLogger("fixtrail")
 # replies right away. Tests set RUN_IN_BACKGROUND = False to send immediately.
 RUN_IN_BACKGROUND = True
 _worker = ThreadPoolExecutor(max_workers=1)
+
+# Landlord emails queued but not yet sent, per issue, so answers can say
+# "on its way" instead of "no email has gone out".
+_pending_landlord_emails: dict[str, int] = {}
+_pending_lock = threading.Lock()
 
 mailer: Mailer | None = None  # created on first use; tests swap in a fake
 
@@ -106,8 +112,27 @@ LANDLORD_MESSAGES = {
 }
 
 
+def _queue_landlord_email(conn, issue_id: str, kind: str, reason: str = "") -> None:
+    with _pending_lock:
+        _pending_landlord_emails[issue_id] = _pending_landlord_emails.get(issue_id, 0) + 1
+    _later(_email_landlord, db.database_path(conn), issue_id, kind, reason)
+
+
+def _landlord_email_pending(issue_id: str) -> bool:
+    with _pending_lock:
+        return _pending_landlord_emails.get(issue_id, 0) > 0
+
+
 def _email_landlord(db_path: str, issue_id: str, kind: str, reason: str = "") -> None:
     """Email the landlord, then log that FixTrail sent it (a verified event)."""
+    try:
+        _send_landlord_email(db_path, issue_id, kind, reason)
+    finally:
+        with _pending_lock:
+            _pending_landlord_emails[issue_id] = max(0, _pending_landlord_emails.get(issue_id, 0) - 1)
+
+
+def _send_landlord_email(db_path: str, issue_id: str, kind: str, reason: str) -> None:
     conn = db.connect(db_path)
     try:
         issue = db.get_issue(conn, issue_id)
@@ -213,7 +238,7 @@ def report_issue(conn, title: str, location: str, category: str | None = None,
     })
 
     path = db.database_path(conn)
-    _later(_email_landlord, path, issue["id"], "new_issue")
+    _queue_landlord_email(conn, issue["id"], "new_issue")
     _later(_email_tenant_confirmation, path, issue["id"])
     return (f"Got it. I logged {_name(issue)} and I'm emailing your landlord now. "
             "I'm also emailing you, so you can reply with photos.")
@@ -253,8 +278,12 @@ def get_issue_history(conn, issue_query: str) -> str:
 
     sentences = [f"{issue['title']} was reported {models.ago(models.days_since(issue['created_at']))}."]
     notices = count("landlord_notified", "follow_up_sent")
-    sentences.append(f"Your landlord was emailed {_times(notices)}." if notices
-                     else "No email to your landlord has gone out yet.")
+    if notices:
+        sentences.append(f"Your landlord was emailed {_times(notices)}.")
+    elif _landlord_email_pending(issue["id"]):
+        sentences.append("An email to your landlord is on its way.")
+    else:
+        sentences.append("No email to your landlord has gone out yet.")
 
     landlord_events = [e for e in events if e["actor"] == "landlord"]
     if landlord_events:
@@ -305,7 +334,7 @@ def confirm_fixed(conn, issue_query: str) -> str:
         return problem
     db.append_event(conn, issue["id"], "tenant_confirmed_fixed", "tenant", "verified")
     _refresh_status(conn, issue["id"])
-    _later(_email_landlord, db.database_path(conn), issue["id"], "confirmed_fixed")
+    _queue_landlord_email(conn, issue["id"], "confirmed_fixed")
     return f"Great, I've closed {_name(issue)} and I'm letting your landlord know."
 
 
@@ -316,5 +345,5 @@ def dispute_fix(conn, issue_query: str, reason: str) -> str:
     reason = reason.strip() or "No reason given."
     db.append_event(conn, issue["id"], "tenant_disputed_fix", "tenant", "verified", {"reason": reason})
     _refresh_status(conn, issue["id"])
-    _later(_email_landlord, db.database_path(conn), issue["id"], "disputed", reason)
+    _queue_landlord_email(conn, issue["id"], "disputed", reason)
     return f"I've recorded that {_name(issue)} still isn't fixed, and I'm telling your landlord."
