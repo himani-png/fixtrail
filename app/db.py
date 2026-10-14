@@ -328,6 +328,19 @@ def create_token(conn: sqlite3.Connection, issue_id: str, purpose: str) -> str:
     return token
 
 
+def get_token_for_issue(conn: sqlite3.Connection, issue_id: str, purpose: str) -> str | None:
+    row = conn.execute(
+        "SELECT token FROM tokens WHERE issue_id = ? AND purpose = ? ORDER BY created_at LIMIT 1",
+        (issue_id, purpose),
+    ).fetchone()
+    return row["token"] if row else None
+
+
+def database_path(conn: sqlite3.Connection) -> str:
+    """The file behind a connection, so background jobs can open their own."""
+    return conn.execute("PRAGMA database_list").fetchone()["file"]
+
+
 def lookup_token(conn: sqlite3.Connection, token: str, purpose: str) -> str | None:
     """Return the issue id for a valid token, or None."""
     row = conn.execute(
