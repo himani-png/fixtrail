@@ -142,7 +142,8 @@ def _timeline(events: list[dict], landlord_token: str | None = None) -> list[dic
                 if isinstance(verdicts, dict):
                     verdicts = ", ".join(f"{k.upper()} {v}" for k, v in sorted(verdicts.items()))
                 row["details"].append(("Email checks", verdicts))
-        if p.get("message_id"):
+                row["details"].append(("Email Message-ID", p.get("message_id")))
+        elif e["type"] in ("landlord_notified", "follow_up_sent"):
             row["details"].append(("Sent to", p.get("to")))
             row["details"].append(("Message-ID", p.get("message_id")))
         rows.append(row)

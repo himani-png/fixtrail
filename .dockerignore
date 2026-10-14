@@ -1,0 +1,12 @@
+.venv/
+.git/
+.env
+*.db
+*.db.before-tamper
+outbox/
+uploads/
+inbox/
+__pycache__/
+.pytest_cache/
+tests/
+docs/

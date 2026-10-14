@@ -1,561 +1,258 @@
-# FixTrail — A Trusted, Shared Repair Record for Renters and Landlords
+# FixTrail
 
-> **Hackathon:** Amazon Developer Hackathon
-> **Primary track:** Alexa+ (self-hosted MCP server over Streamable HTTP, plus an Agent Skill and an Alexa+ simulator web app)
-> **Mini challenge:** AWS Builder (Amazon Bedrock + Strands Agents SDK power the simulator; SES + S3 in production)
-> **Optional stretch:** Ring integration (repair-visit evidence via Ring APIs)
-> **Built with:** Claude Code
+**A neutral, tamper-evident repair record for renters and landlords, reported by voice.**
 
----
+FixTrail is an MCP server for the **Alexa+** track of the Amazon Developer Hackathon. A tenant says
+*"Alexa, the heater stopped working"*, FixTrail emails the landlord immediately, and every event goes into a shared,
+append-only record that neither side, and not even FixTrail itself, can quietly rewrite.
 
-## 0. Instructions for Claude Code (read this first)
+![The Alexa+ simulator calling FixTrail's MCP tools](docs/screenshots/simulator.png)
 
-You are helping a **first-time developer** build this project for a hackathon. Please:
-
-1. **Work phase by phase** (see Section 8). Finish one phase, run its checks, and explain what you did in plain language before moving on.
-2. **Explain as you go.** The developer is new to Python, MCP, and AWS. Briefly explain each new concept, command, and file.
-3. **Verify, don't assume.** Before writing MCP code, check the current official MCP Python SDK docs and confirm the installed version supports **MCP spec 2025-11-25 or later** and the **Streamable HTTP** transport. If the SDK API differs from examples in this file, follow the real SDK.
-4. **Follow the hackathon's Alexa+ resources** (summarized in "Hackathon resources" below). They allow simulating Alexa+ with a web app; a real Alexa+ connection is optional. Do not invent a connection method. If something is unclear, tell the developer to ask at hackathon office hours.
-5. **Never commit secrets.** Use a `.env` file (listed in `.gitignore`) and provide `.env.example`.
-6. **Ask before** creating AWS resources, spending money, or deploying.
-7. **Keep it simple.** Prefer fewer dependencies and readable code over clever code.
-8. **Keep a friction log** (Section 11) whenever something is confusing, broken, or poorly documented. It earns up to a 10% judging bonus.
-9. **Read the design review** (Section 16). It explains why key design choices exist, such as the honest labels and email fingerprints. Don't remove or weaken them.
-
-### Hackathon resources (what the official Resources page says)
-- **Alexa+ track:** "Build a working MCP (Model Context Protocol) integration on the open standards for Agent Skills and Streamable HTTP transports. You can simulate an Alexa+ experience using your preferred agentic tools via a web app." So the deliverables are: (1) the MCP server over Streamable HTTP, (2) an Agent Skill following the [Agent Skills](https://agentskills.io/) standard (a folder with a `SKILL.md`), and (3) a web app that simulates Alexa+.
-- **AWS Builder mini challenge:** "incorporate AWS services with documented integrations: Amazon Bedrock, AgentCore, the Strands SDK, Kiro, SageMaker, and more. The AWS free tier is enough to get started."
-- **Open Source mini challenge (optional):** contribute to any open-source repository during the hackathon window.
-- **AWS credits:** "October 7th Update: we are out of credit codes." Any AWS cost is on the developer's own account, so keep usage small and set a billing alert.
-- **Live office hours:** schedule and join link are on the hackathon landing page.
-- **Open question for office hours:** is a web-app simulation of Alexa+ acceptable for the demo video, or must it show the real Alexa+? (The Resources page suggests simulation is fine.)
-
----
-
-## 1. The Problem
-
-When something breaks in a rental home (heat, water leak, mold, broken lock), tenants report it to the landlord. Disputes often follow:
-
-- Tenants say "I reported this five times." Landlords say "I was never told."
-- Landlords say "I sent a plumber and the tenant didn't let them in." Tenants disagree.
-- Housing offices, mediators, and courts need **dated, trustworthy records**, and usually nobody has them. Records are scattered across texts, calls, and memory.
-
-A tenant's private notes are weak evidence, because anyone can write anything. A good solution has to be **fair to both sides** and **hard to fake**.
-
-## 2. The Solution
-
-FixTrail is a **neutral, shared, tamper-evident repair record**.
-
-- The tenant reports problems **by voice through Alexa+** ("Alexa, the heater stopped working again").
-- Every report is **automatically sent to the landlord** by email, so there is proof the landlord was notified.
-- The tenant can attach **timestamped photos** of the problem in two ways: through a **web upload page**, or by **replying to a FixTrail email with photos attached**.
-- The landlord gets a **secure link** to respond: acknowledged, repair scheduled, fixed.
-- Every event goes into an **append-only log** with server timestamps and a **hash chain**, so entries cannot be edited, deleted, or backdated without detection.
-- Either side can generate a **clean, dated report** of the full history.
-
-**Key design principle:** FixTrail does not take sides. It protects honest tenants (proof they reported and were ignored) **and** honest landlords (proof they responded quickly). Fake claims are hard to make because every claim is sent to the other party immediately.
-
-**Honesty labels:** Events the system can verify (for example, an email it actually sent) are marked **verified**. Events only the tenant claims (for example, "I phoned the landlord") are logged but clearly marked **tenant-reported (unverified)**.
-
-## 3. Example Voice Interactions
-
-| Tenant says | What happens |
+| Track / challenge | What FixTrail provides |
 |---|---|
-| "Alexa, the kitchen sink is leaking." | Issue created, landlord emailed, confirmation spoken, tenant gets a confirmation email ("Reply with photos to add them") |
-| "Alexa, what's still broken?" | "2 open issues. The sink leak has been open 9 days, landlord acknowledged it 7 days ago. The heater has been open 3 days, no landlord response yet." |
-| "Alexa, remind my landlord about the heater." | A follow-up email is sent and logged as verified |
-| "Alexa, I called the landlord about the sink." | Logged as tenant-reported (unverified) |
-| "Alexa, the sink is fixed." | Tenant confirms the fix, issue closed |
-| "Alexa, make my repair report." | Report generated, link sent to the tenant's email |
+| **Alexa+** | An MCP server over Streamable HTTP (spec 2025-11-25) with 10 tools, an [Agent Skill](skills/fixtrail/SKILL.md), and an Alexa+ simulator web app |
+| **AWS Builder** | Amazon Bedrock + the Strands Agents SDK power the simulator; Amazon SES, S3, and SNS handle email and photos ([AWS.md](docs/AWS.md)) |
 
-## 4. Architecture
+---
+
+## The problem
+
+When something breaks in a rental home, disputes follow: *"I reported this five times"* versus *"I was never told."*
+Housing inspectors, mediators, and courts need dated, trustworthy records, and usually nobody has them. A tenant's
+private notes are weak evidence because anyone can write anything. A useful record has to be **fair to both sides**
+and **hard to fake**.
+
+## How it works
+
+1. **The tenant speaks.** *"The kitchen sink is leaking."* The assistant calls FixTrail's `report_issue` tool.
+2. **The landlord is notified at once**, by email, with a private link to respond: acknowledge, schedule a repair,
+   mark it fixed, or say they couldn't get in.
+3. **Both sides add to one shared timeline.** The tenant can add photos (upload them, or simply reply to a FixTrail
+   email with photos attached) and say *"I called my landlord"*, *"remind my landlord"*, or *"the sink is fixed"*.
+4. **Anyone can produce a dated report** with response times, such as *"Landlord first responded after 2 days"* or
+   *"No landlord response in 12 days"*.
 
 ```
  Tenant's voice
       |
-   Alexa+  --(MCP over Streamable HTTP)-->  FixTrail Server (Python)
-                                              |-- MCP tools (/mcp)
-                                              |-- Web pages (tenant photos, landlord replies, reports)
-                                              |-- Event log (append-only, hash-chained)
-                                              |-- Storage: SQLite (local) / persistent storage (prod)
-                                              |-- Email out: console (local) / AWS SES (prod)
-                                              |-- Email in (photo replies): inbox/ folder (local) / SES receiving (prod)
-                                              |-- Photos: local folder (local) / AWS S3 (prod)
-
- Tenant's email app --(reply with photo)--> SES receiving --> FixTrail inbound handler --> Event log
-
- Alexa+ simulator (web page /simulator)
-   mic (browser speech recognition) --> Strands agent + Amazon Bedrock model + FixTrail Agent Skill
-        --(MCP over Streamable HTTP)--> FixTrail /mcp --> spoken reply (browser speech synthesis)
+ Alexa+ (or the Alexa+ simulator: Strands agent + Bedrock + FixTrail Agent Skill)
+      |  MCP over Streamable HTTP
+      v
+ FixTrail server (Python, FastAPI)
+      |-- 10 MCP tools at /mcp
+      |-- web pages: tenant timeline, landlord responses, photos, reports, /verify
+      |-- append-only, hash-chained event log (SQLite with triggers)
+      |-- email out: local .eml files, or Amazon SES  (every email carries the record's fingerprint)
+      |-- photos: local folder, or Amazon S3
+      |-- photo replies by email: local inbox/ folder, or SES receiving -> S3 -> SNS -> /inbound/ses
 ```
 
-The simulator stands in for Alexa+ exactly where Alexa+ would sit: it is an MCP client that discovers FixTrail's tools and calls them. A real Alexa+ connection, if access becomes available, uses the same `/mcp` endpoint.
+## How FixTrail earns trust
 
-**One server, two faces:**
+**Honest labels.** Every event is marked **Verified** only if FixTrail itself saw it happen (it received the report or
+photo, sent the email, or recorded the landlord's click). Things it can't see, like phone calls or a visit where
+nobody answered, are labeled **Tenant-reported** or **Landlord-reported**.
 
-1. **MCP endpoint** at `/mcp` for Alexa+ (and for testing with MCP Inspector).
-2. **Web pages** for things voice can't do well: uploading photos, landlord responses, viewing reports.
+**An append-only hash chain.** Each event's fingerprint (SHA-256) is computed from its contents plus the previous
+event's fingerprint. Database triggers block edits and deletes, server time is used for every timestamp, and
+`/verify` recomputes the whole chain.
 
-Suggested approach: a FastAPI (or Starlette) app that serves the web pages, with the MCP SDK's Streamable HTTP app mounted at `/mcp`. Confirm the exact mounting method in current SDK docs.
+**Witnesses outside FixTrail.** A hash chain alone can be rewritten by whoever runs the server. So every email ends
+with the record's fingerprint at that moment. Those emails sit in the tenant's and landlord's inboxes, where FixTrail
+can't change them. If history is rewritten, old fingerprints stop matching:
 
-**Local vs. production:** Every external service sits behind a small interface so the project runs fully locally with no AWS account.
+| The operator rewrites history and recomputes every hash: `/verify` still says "Record intact"... | ...but a fingerprint from an old email exposes it |
+|---|---|
+| ![Record intact](docs/screenshots/verify_match.png) | ![No match](docs/screenshots/verify_tampered.png) |
 
-| Concern | Local dev | Production |
+`scripts/tamper_demo.py` performs exactly this attack (with a backup and `--restore`) for the demo.
+
+## Screenshots
+
+| Tenant dashboard | Issue timeline with labels and an emailed photo |
+|---|---|
+| ![Dashboard](docs/screenshots/dashboard.png) | ![Timeline](docs/screenshots/timeline.png) |
+
+| Landlord response page (no login, private link) | Printable repair report |
+|---|---|
+| ![Landlord page](docs/screenshots/landlord.png) | ![Report](docs/screenshots/report.png) |
+
+*Screenshots use the clearly bannered demo data from `scripts/seed.py --demo`.*
+
+## MCP tools
+
+| Tool | Tenant says something like | What happens |
 |---|---|---|
-| Database | SQLite file | Decide in Phase 7 (see note) |
-| Email | Print to console + save to `outbox/` | AWS SES |
-| Photos | `uploads/` folder | AWS S3 |
-| Inbound email (photo replies) | Drop `.eml` files into `inbox/` and run an ingest script | AWS SES email receiving |
-
-> **Note on production storage:** Some AWS hosting options (like App Runner) do not keep local files between deploys, so a SQLite file there can be lost. In Phase 7, Claude Code should recommend the simplest persistent option, such as a small EC2/Lightsail instance with SQLite on disk, or DynamoDB, and explain the tradeoff.
-
-## 5. Data Model
-
-### `properties`
-| field | type | notes |
-|---|---|---|
-| id | text (uuid) | |
-| address | text | |
-| tenant_name | text | |
-| tenant_email | text | |
-| landlord_name | text | |
-| landlord_email | text | |
-
-For the hackathon demo, one property configured via `.env` or a seed script is fine.
-
-### `issues`
-| field | type | notes |
-|---|---|---|
-| id | text (uuid) | |
-| property_id | text | |
-| title | text | e.g. "Kitchen sink leaking" |
-| location | text | e.g. "kitchen" |
-| category | text | heat, water, electrical, pest, mold, lock, appliance, other |
-| urgency | text | emergency, urgent, routine |
-| status | text | open, acknowledged, scheduled, landlord_marked_fixed, closed, disputed |
-| created_at | text | server UTC timestamp |
-
-Issue `status` is **derived from events**. It is a cached convenience, and events are the source of truth.
-
-### `events` (append-only, the heart of the system)
-| field | type | notes |
-|---|---|---|
-| id | integer | auto-increment, sequential |
-| issue_id | text | |
-| type | text | see list below |
-| actor | text | tenant, landlord, system |
-| verification | text | verified, tenant_reported, or landlord_reported |
-| payload | text (JSON) | details, e.g. message text, photo hash |
-| created_at | text | **server** UTC timestamp, never client-supplied |
-| prev_hash | text | hash of the previous event |
-| hash | text | sha256(prev_hash + canonical JSON of this event's fields) |
-
-**Event types:**
-- `issue_reported`: tenant created an issue
-- `landlord_notified`: system sent an email (verified; payload stores the message ID and a copy of the text)
-- `follow_up_sent`: system sent a reminder (verified)
-- `tenant_contact_claimed`: tenant says they called or texted (tenant_reported)
-- `photo_added`: payload stores the S3/local key, the **sha256 of the image file**, and `source` (`web_upload` or `email_reply`). For email photos, also store the sender address, the email's Message-ID, and the SES spam/authentication verdicts. If the image has an EXIF "taken at" date, store it as extra info, but the **verified time is always the server's receipt time**.
-- `landlord_acknowledged`, `landlord_scheduled` (payload: date/time), `landlord_marked_fixed`, `landlord_comment`
-- `access_issue`: landlord reports they couldn't get in (labeled `landlord_reported`)
-- `tenant_confirmed_fixed`, `tenant_disputed_fix`
-
-### `tokens`
-| field | type | notes |
-|---|---|---|
-| token | text | long random secret (about 256 bits) |
-| issue_id | text | |
-| purpose | text | `landlord` (the `/respond/{token}` link) or `photo_reply` (the `photos+{token}@domain` Reply-To address) |
-| created_at | text | |
-
-One table serves both kinds of secret link. A token only works for its own purpose, so a landlord link can't be used to email in photos, and vice versa.
-
-**Verification labels follow one rule:** `verified` means FixTrail itself witnessed the act (it received the report or photo, sent the email, or recorded the landlord's click). `tenant_reported` and `landlord_reported` mean someone described something FixTrail could not see, such as a phone call or a visit where nobody answered the door.
-
-### Tamper-evidence rules
-- The app code **never** runs `UPDATE` or `DELETE` on `events`. Enforce this in the data-access layer, and add a SQLite trigger that blocks updates and deletes on `events`.
-- Each event's `hash` links to the previous event (hash chain). Provide a `verify_chain()` function and a `/verify` page that recomputes all hashes and reports **"Record intact"** or **the first broken entry**.
-- Use canonical JSON (sorted keys, no extra whitespace) when hashing, so results are reproducible.
-
-### Who guards the record? Fingerprints in every email
-The hash chain alone has a known weakness: whoever runs the server could rewrite the whole log and recompute every hash, and `/verify` would still pass. To close this gap, FixTrail **anchors the chain outside its own control**:
-
-- **Every email FixTrail sends** (to tenant or landlord) ends with a footer like:
-  `Record fingerprint after event #14: 3f9a…c21` (show the first and last characters; include the full hash in a plain-text line for checking).
-- These emails sit in the tenant's and landlord's inboxes, where FixTrail cannot change them. If history is rewritten later, fingerprints in old emails will no longer match.
-- The **verify page** gets a "Check a fingerprint" box: paste an event number and fingerprint from any old email, and it confirms whether that event's hash still matches.
-- Tenant and landlord become **each other's witnesses**, which fits the neutral design.
-- Implementation: after each `append_event()`, read the newest hash and pass it, with the event number, into the email footer template. Add a `check_fingerprint(event_id, hash)` function plus a test showing that a rewritten log fails an old fingerprint.
-- **Demo moment:** rewrite the database and recompute all hashes, show `/verify` still passing, then paste the fingerprint from an old email and show it failing. This proves the record is guarded by outside witnesses, not just by FixTrail.
-
-## 6. MCP Tools (for Alexa+)
-
-Write clear tool descriptions. Alexa+ uses them to decide which tool to call. Return short, speakable text (Alexa reads it aloud) plus structured data where the SDK supports it.
-
-| Tool | Inputs | Behavior | Spoken response example |
-|---|---|---|---|
-| `report_issue` | title, location, category?, urgency? | Creates issue, logs `issue_reported`, emails landlord, logs `landlord_notified` | "Got it. I logged the kitchen sink leak and emailed your landlord." |
-| `list_open_issues` | none | Lists open issues with days open and the latest landlord response | "You have 2 open issues…" |
-| `get_issue_history` | issue (title or id) | Short spoken summary of the timeline | "The heater was reported 12 days ago. Your landlord was emailed twice and hasn't responded." |
-| `send_follow_up` | issue | Emails landlord a reminder, logs `follow_up_sent` | "I sent your landlord a reminder about the heater." |
-| `log_contact_attempt` | issue, method (call, text, in person), note? | Logs `tenant_contact_claimed` as tenant_reported | "Noted. I've marked it as something you reported, since I can't verify calls." |
-| `confirm_fixed` | issue | Logs `tenant_confirmed_fixed`, closes issue | "Great, I've closed the sink issue." |
-| `dispute_fix` | issue, reason | Logs `tenant_disputed_fix`, emails landlord | "I've recorded that the heater still isn't working and told your landlord." |
-| `generate_report` | issue? (default: all) | Builds report, emails the tenant a link | "Your report is ready. I've emailed you the link." |
-| `get_photo_upload_link` | issue | Emails the tenant a message with the upload page link; replying to that email with photos also works | "I've emailed you. Reply with photos, or use the link inside." |
-
-**Matching issues by name:** Users will say "the heater," not an ID. Implement simple fuzzy matching on title and location among open issues. If more than one matches, return a short clarifying question.
-
-## 7. Web Pages
-
-Keep these simple, clean, and mobile-friendly. Plain HTML templates (Jinja2) plus minimal CSS is fine.
-
-1. **Tenant dashboard** (`/`): open and closed issues with days open and a status badge.
-2. **Issue timeline** (`/issues/{id}`): every event in order, with timestamp, actor, and a **verified** or **tenant-reported** label, plus photos.
-3. **Photo upload** (`/issues/{id}/photos`): upload image, store file, compute sha256, log `photo_added`.
-4. **Landlord response page** (`/respond/{token}`): no login. Shows the issue and photos, with buttons: Acknowledge, Schedule repair (date picker), Mark fixed, Couldn't get access, Add comment. Each button logs an event.
-5. **Report** (`/reports/{id}`): printable, dated summary (property, each issue, full timeline, days open, response times, photo thumbnails, verification labels, chain-integrity status). PDF export is a stretch goal.
-6. **Verify** (`/verify`): runs `verify_chain()` and shows the result, plus a "Check a fingerprint" box where anyone can paste an event number and fingerprint from an old email.
-
-### 7b. Second photo channel: reply by email
-
-Tenants often take photos on their phone at the moment a problem happens. Replying to an email is the easiest possible way to send them.
-
-**How it works:**
-1. Whenever an issue is created (and when `get_photo_upload_link` is called), the tenant receives an email such as: *"FixTrail logged: Kitchen sink leaking. Reply to this email with photos to add them to the record."*
-2. The email's **Reply-To** address identifies the issue, for example `photos+<issue_token>@<your-domain>`. The token is long and random, so it can't be guessed.
-3. The tenant replies with one or more photos attached, with no app or login needed.
-4. FixTrail receives the email, checks it, extracts the image attachments, stores them (S3 in production), computes each file's sha256, and appends a `photo_added` event with `source: email_reply`.
-5. FixTrail sends a short confirmation: *"2 photos added to: Kitchen sink leaking."*
-
-**Checks before accepting (to keep the record trustworthy):**
-- The sender address must match the tenant's registered email.
-- The issue token must be valid and the issue must exist.
-- Use the SPF/DKIM and spam/virus verdicts that SES provides for received mail, and reject messages that fail.
-- Accept only image types (JPEG, PNG, HEIC; convert HEIC to JPEG for display) and enforce a size limit.
-- Ignore the email's body text for the record, or store it only as a tenant comment labeled tenant-reported.
-
-**Implementation notes (Claude Code: verify against current AWS docs):**
-- Production: an SES **email receiving** rule set stores incoming mail in S3, then triggers processing (for example an SNS notification or Lambda that calls a protected FixTrail endpoint). SES email receiving is only available in certain AWS regions and requires a domain you control with an MX record pointing to SES. Check region support and setup steps first.
-- Local development: an `inbox/` folder plus `scripts/ingest_email.py` that parses `.eml` files with Python's built-in `email` library and runs the same processing code. This lets you build and test without any AWS setup.
-- Put the shared logic in `app/inbound_email.py` so local and production use identical code.
-- If domain or region setup blocks you, the web upload page still works, so record the blocker in the friction log and move on.
-
-**Demo security note:** For the hackathon, a single configured tenant with a simple passcode on tenant pages is acceptable. Landlord pages use unguessable tokens. Document these limits honestly in the README "Limitations" section.
-
-## 8. Build Phases (do these in order)
-
-### Priorities: scope is the biggest risk
-A polished, working core beats an ambitious project that's half finished.
-
-| Must have (the demo depends on it) | Nice to have | Skip unless ahead of schedule |
-|---|---|---|
-| Phases 1–6: setup, event log + email fingerprints, tools, web pages, reports, Agent Skill + Alexa+ simulator | Photos by email, local version (5b); AWS deploy with real email (7) | Real SES email receiving; real Alexa+ device connection (6d); Ring (8) |
-
-**Progress (October 14, 2026):** Phases 1–5b and Phase 6a–6b are done (98 tests passing). The simulator works end to end in offline mode; Phase 6c (Amazon Bedrock) is written and waits only for an AWS account.
-
-**About Phase 1.5:** the hackathon's Resources page allows simulating Alexa+ with a web app, so the real-Alexa+ smoke test below is now optional reference material (Phase 6d), not a blocker.
-
-### Phase 1: Setup and "hello world" MCP server
-- Create the repo structure (Section 9), virtual environment, `requirements.txt`, `.gitignore`, `.env.example`, `LICENSE` (MIT).
-- Install the official MCP Python SDK and confirm the version and spec support.
-- Create one tool, `ping`, that returns "FixTrail is running."
-- Run the server with Streamable HTTP at `/mcp`.
-- **Check:** Connect with **MCP Inspector**, list tools, call `ping`.
-- **Explain to developer:** What MCP is, what a "tool" is, what Streamable HTTP means.
-
-### Phase 1.5: Real Alexa+ connection (optional reference for Phase 6d)
-Only needed if the team gets real Alexa+ access. Verified against Amazon's Alexa+ add-on docs (October 2026). Official pages: [Docs home](https://developer.amazon.com/docs/alexaplus/add-ons/home.html), [Set up your environment](https://developer.amazon.com/docs/alexaplus/add-ons/set-up-your-development-environment.html), [MCP QuickStart](https://developer.amazon.com/docs/alexaplus/add-ons/mcp-toolkit-quickstart.html), [Authentication](https://developer.amazon.com/docs/alexaplus/add-ons/mcp-toolkit-authentication.html), [Account linking](https://developer.amazon.com/docs/alexaplus/add-ons/mcp-toolkit-account-linking.html).
-
-**Prerequisites (sort these out first):**
-- **Access.** The docs say the MCP Toolkit is "available to select partners only," and setup uses an AWS account registered with an Alexa Solutions Architect plus a private npm registry (CodeArtifact). Ask the hackathon organizers how participants get access.
-- **Operating system.** The CLI officially supports macOS or Ubuntu, not Windows. On Windows, use WSL (Ubuntu inside Windows).
-- **Node.js 24 or later.**
-- **Accounts:** a free Alexa developer account (an existing Amazon account works) and an AWS account.
-
-**Steps:**
-1. Install and log in: `npm install -g @alexa-ai/cli`, then `alexa-ai configure` (opens a browser for Login with Amazon).
-2. Run the server and expose it over public HTTPS with a tunnel such as `cloudflared`.
-3. Create the add-on, either with the docs' coding-agent path or manually: `alexa-ai new mcp --name "FixTrail" --locale en-US --mcp-server-url "<tunnel URL>/mcp"`.
-4. Fill in `addon-package/addon.json`: short description (up to 123 characters), full description, 3–4 example phrases, **privacy policy and terms URLs**, and icons (six sizes plus one carousel image).
-5. Deploy with `alexa-ai deploy`, then test in the Alexa+ web simulator. Run `alexa-ai deploy` again whenever tools change, because Alexa+ refreshes tool info only on deploy.
-
-- **Check:** Alexa+ calls `ping` successfully.
-- **If it doesn't work:** write a friction log entry, ask at office hours, and rely on the simulator (Phase 6b–6c).
-
-**Requirements that affect the whole design (already followed, so a real connection stays possible):**
-- **Spec and transport:** MCP spec 2025-11-25 over Streamable HTTP (Phase 1 already does this).
-- **Speed:** responses must come back in **under 500 ms**. Tools must never wait on slow work, so send emails in the background after replying.
-- **Account linking (OAuth 2.1 with PKCE S256) is optional in the docs,** but recommended when tools access user-specific data or take actions for the user, which FixTrail does. Plan: run the smoke test without it, then add it in Phase 6 if time allows (the single-tenant demo works without it). If added, the server must:
-  - return `401` or `403` without a valid token, **without** a `WWW-Authenticate` header
-  - host `/.well-known/oauth-protected-resource` (fields `resource`, `authorization_servers`, `scopes_supported`)
-  - support PKCE S256 and static client registration
-  - The MCP Python SDK has built-in auth hooks (`token_verifier`, `auth_server_provider`); check them before writing custom code.
-- **Learning from other entrants:** reading another participant's public code to understand the OAuth setup is fine, but don't copy it.
-
-### Phase 2: Database and event log
-- SQLite schema for all tables, with a trigger blocking UPDATE/DELETE on `events`.
-- Data-access layer with an `append_event()` function that sets the server timestamp and computes the hash.
-- `verify_chain()` function.
-- `check_fingerprint(event_id, hash)` function (see "Who guards the record?").
-- Seed script for one demo property.
-- **Check:** pytest tests show that events append correctly, the hash chain verifies, manual tampering in the DB is detected, UPDATE/DELETE are blocked, and **a fully rewritten and rehashed log fails an old fingerprint check**.
-
-### Phase 3: Core MCP tools
-- Implement `report_issue`, `list_open_issues`, `get_issue_history`, `log_contact_attempt`, `confirm_fixed`, `dispute_fix`.
-- Email goes through a `Mailer` interface. For now, `ConsoleMailer` prints and saves to `outbox/`.
-- Every outgoing email includes the record fingerprint footer with the event number.
-- Fuzzy issue matching.
-- **Check:** In MCP Inspector, run a full scenario: report, list, history, confirm fixed. Inspect `outbox/` and the events table.
-
-### Phase 4: Web pages
-- FastAPI app serving templates, with MCP mounted at `/mcp` in the same process.
-- Dashboard, timeline, photo upload (local storage + sha256), landlord response page with tokens, verify page.
-- Landlord emails include the `/respond/{token}` link.
-- **Check:** Report an issue via MCP, open the landlord link from `outbox/`, click "Schedule repair," and see it appear on the tenant timeline and in `list_open_issues`.
-
-### Phase 5: Follow-ups and reports
-- `send_follow_up`, `generate_report`, `get_photo_upload_link` tools.
-- Report page with response-time stats (for example, "Landlord first responded after 6 days").
-- **Check:** The generated report looks clean when printed from the browser.
-
-### Phase 5b: Photos by email reply (local version)
-- Tenant confirmation emails with a per-issue Reply-To token (Section 7b).
-- `app/inbound_email.py` with the sender, token, and attachment checks.
-- `scripts/ingest_email.py` to process `.eml` files from `inbox/`.
-- **Check:** Save a sample reply email with a photo as an `.eml` file, run the ingest script, and see the photo appear on the issue timeline labeled "via email." Test that emails from the wrong sender or with a bad token are rejected.
-- Production wiring (SES receiving) happens in Phase 7.
-
-### Phase 6: Agent Skill and Alexa+ simulator
-The hackathon's Alexa+ track asks for an MCP integration on the open standards for Agent Skills and Streamable HTTP, and allows simulating Alexa+ with a web app.
-
-**6a. Agent Skill** (no AWS needed)
-- `skills/fixtrail/SKILL.md` following the [Agent Skills specification](https://agentskills.io/specification): frontmatter with `name` and `description`, then instructions on when and how to use FixTrail's MCP tools.
-- Cover: voice style (short, speakable answers), passing the tenant's own words as the issue, never inventing facts, and the honest labels (verified vs. tenant-reported).
-- **Check:** the skill passes the reference validator (or a manual check against the spec), and an agent loaded with it handles the Section 3 scenarios.
-
-**6b. Alexa+ simulator page** (no AWS needed)
-- `/simulator`: a microphone button using the browser's built-in speech recognition, spoken replies with the browser's speech synthesis (free in Chrome and Edge), a typed-input fallback, and a chat transcript.
-- Make it clear on the page that it simulates Alexa+.
-- **Check:** works in Chrome and Edge; typed input works in any browser.
-
-**6c. The agent** (needs AWS for Bedrock)
-- A Strands Agents SDK agent using an Amazon Bedrock model, connected to FixTrail's `/mcp` as an MCP client, with the Agent Skill as its instructions.
-- Keep the model small and cheap; credits are no longer available, so costs are on the developer's account.
-- Build and test first with a stand-in model; switch on Bedrock once the AWS account exists. Ask before enabling anything that costs money.
-- **Check:** complete the Section 3 voice scenarios in the simulator.
-
-**6d. Real Alexa+** (optional)
-- Only if access becomes available; see Phase 1.5.
-
-- **Throughout:** tune tool descriptions and spoken responses based on how the agent behaves, and log any friction.
-
-### Phase 7: AWS deployment (ask developer before creating resources)
-- Choose hosting plus persistent storage (see Section 4 note) and explain the options and costs.
-- Implement `SESMailer` (AWS SES; note SES sandbox mode requires verifying sender and recipient emails, which is fine for a demo).
-- Implement `S3PhotoStore`.
-- Set up SES email receiving for photo replies (needs a domain and a supported region; see Section 7b).
-- Containerize with a `Dockerfile`.
-- Document all AWS services used in `docs/AWS.md` (required for the AWS Builder mini challenge): Bedrock and Strands (simulator), SES, S3, and hosting.
-- Set a billing alert first. There are no hackathon credits, so prefer free-tier options and small models.
-- **Check:** The public HTTPS URL works, real emails arrive, and photos are stored in S3.
-
-### Phase 8 (stretch): Ring integration
-- Using the Ring simulator/APIs provided by the hackathon, detect a visitor event at the door during a scheduled repair window and log it as `repair_visit_detected` (verified by device) with the time.
-- Only attempt this after Phases 1–7 work.
-
-### Phase 9: Polish and submission
-- Complete this README's "Running locally," "Deploying," and "Limitations" sections with real, tested commands.
-- Add screenshots to `docs/`.
-- Run the full demo script (Section 10) end to end.
-- Complete the submission checklist (Section 12).
-
-## 9. Repository Structure
-
-```
-fixtrail/
-├── README.md
-├── LICENSE
-├── .env.example
-├── .gitignore
-├── requirements.txt
-├── Dockerfile
-├── app/
-│   ├── main.py            # FastAPI app; mounts MCP at /mcp
-│   ├── mcp_tools.py       # MCP tool definitions (thin wrappers)
-│   ├── services.py        # what each action does; shared by tools and web pages
-│   ├── web.py             # web pages: dashboard, timeline, landlord, photos, reports, verify
-│   ├── db.py              # schema, append_event, verify_chain, check_fingerprint
-│   ├── models.py          # status derivation, issue matching, wording
-│   ├── mailer.py          # Mailer interface, ConsoleMailer, SESMailer (Phase 7)
-│   ├── photos.py          # PhotoStore interface, LocalPhotoStore, S3PhotoStore (Phase 7)
-│   ├── inbound_email.py   # checks + processing for photo reply emails
-│   ├── reports.py         # report stats, built only from the event log
-│   ├── simulator.py       # Alexa+ simulator agent: Strands + Bedrock (Phase 6)
-│   ├── config.py          # loads .env
-│   └── templates/         # Jinja2 HTML templates
-├── skills/
-│   └── fixtrail/
-│       └── SKILL.md       # Agent Skill (Phase 6a)
-├── scripts/
-│   ├── seed.py            # demo property and sample data
-│   ├── try_it.py          # run a voice scenario against a running server
-│   ├── make_test_reply.py # local: create a tenant photo-reply .eml in inbox/
-│   └── ingest_email.py    # local: process .eml files from inbox/
-├── tests/
-│   ├── test_event_log.py
-│   ├── test_tools.py
-│   ├── test_web.py
-│   └── test_inbound_email.py
-└── docs/
-    ├── AWS.md
-    ├── FRICTION_LOG.md
-    ├── PRODUCT_FEEDBACK.md
-    └── screenshots/
-```
-
-## 10. Demo Video Script (under 3 minutes, best material first)
-
-**Framing:** FixTrail is **evidence for when things go wrong**, not a promise that repairs get done faster. It works even if the landlord never clicks anything, because proof of notice comes from the emails themselves.
-
-1. **0:00–0:20 Hook.** "Repair disputes come down to one question: who told whom, and when? FixTrail keeps a record of that both sides can trust." (Don't use a statistic unless you've verified it.)
-2. **0:20–1:00 Voice flow.** In the Alexa+ simulator (or real Alexa+, if available), the tenant says the heater is broken, the landlord's email arrives (point out the fingerprint footer), then "Alexa, what's still broken?" Say clearly that the simulator stands in for Alexa+ and uses the same MCP endpoint.
-3. **1:00–1:25 Two landlords.** For one issue, the landlord ignores it, and the timeline still shows proof of notice and days unanswered. For another, the landlord schedules a repair, and the record protects them too.
-4. **1:25–2:10 Trust.** Show verified vs. tenant-reported labels and a photo's fingerprint. Then the key moment: rewrite the database and recompute every hash, show `/verify` still passing, paste the fingerprint from an old email, and show it **failing**. "FixTrail can't secretly rewrite history, because both parties hold witnesses."
-5. **2:10–2:40 Report.** "Alexa, make my repair report," then show the clean dated report.
-6. **2:40–2:55 Close.** Who it helps (tenants, fair landlords, housing advocates and mediators) and that it runs on Alexa+ and AWS.
-
-Use only your own footage and royalty-free or no music. No third-party trademarks without permission.
-
-## 11. Friction Log Template (`docs/FRICTION_LOG.md`)
-
-Add an entry every time something is confusing or broken:
-
-```
-### Entry N: <short title>
-- Tool/API/SDK:
-- Task attempted:
-- Steps taken:
-- Expected:
-- Actually happened:
-- Severity: critical / high / medium / low
-- Workaround:
-- Suggestion for Amazon:
-```
-
-## 12. Submission Checklist
-
-- [ ] Text description of the project (what it does, how it works)
-- [ ] GitHub repo with all source, assets, and run instructions
-- [ ] Repo is **public with an open-source LICENSE**, or private and shared with testing@devpost.com and the Amazon reviewers listed on the **official Devpost page** (verify the list there; add reviewers at submission time, because invites expire after 7 days)
-- [ ] Code actually calls MCP (a real server entry point, not just mentioned in the README)
-- [ ] Demo video under 3 minutes, public on YouTube or Vimeo, in English, showing the MCP server working with Alexa+ (confirm at office hours that the Alexa+ simulator is acceptable)
-- [ ] Agent Skill included (`skills/fixtrail/SKILL.md`) and referenced in the description
-- [ ] Product feedback for every tool used (MCP SDK, MCP Inspector, Alexa+ docs, Strands, Bedrock, SES, S3, etc.): what you used it for, what worked, what needs work, onboarding experience, whether you'd use it again
-- [ ] Track: Alexa+. Mini challenge: AWS Builder, with `docs/AWS.md` describing the services used
-- [ ] Optional: Open Source mini challenge (a contribution to any open-source repo during the hackathon window)
-- [ ] Friction log (`docs/FRICTION_LOG.md`) for the up to 10% bonus
-- [ ] Optional: feature requests (critical / important / nice-to-have)
-
-## 13. Limitations and Responsible Use (keep in final README)
-
-- FixTrail is a **record-keeping tool, not legal advice**. Tenant laws and notice requirements vary by state and city. Whether records are accepted as evidence is up to the relevant court or agency.
-- Tenant-reported events (calls, in-person conversations) cannot be verified and are labeled as such.
-- Email delivery proves a message was sent, not that it was read. Messages from an unfamiliar service may land in spam.
-- Some leases or local laws require specific notice methods (for example, certified mail). FixTrail's emails may not satisfy those requirements on their own.
-- FixTrail proves notice and documents what happened. It cannot force a landlord to make repairs. Its value is the evidence a tenant can bring to a housing inspector, mediator, or court.
-- Email fingerprints protect against rewriting history only if the parties keep the emails.
-- The hackathon version supports one property and simple authentication. A production version would need full accounts, multi-property support, data export, and stronger security and privacy controls.
-- Photos and records may contain personal information. Store only what's needed, and let users export and delete their own accounts (the event log of an active dispute should be preserved for both parties; document this policy clearly).
-
-## 14. Running Locally
-
-> Claude Code: fill this in during Phase 9 with real, tested commands. Expected shape:
-
-```bash
-git clone <repo-url> && cd fixtrail
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env
-python scripts/seed.py
-# start server (exact command depends on final setup)
-# open http://localhost:8000 and connect MCP Inspector to http://localhost:8000/mcp
-```
-
-## 15. Deploying
-
-> Claude Code: fill this in during Phase 7/9 with the chosen AWS setup.
+| `report_issue` | "The kitchen sink is leaking." | Logs the issue, emails the landlord, emails the tenant a reply-with-photos address |
+| `list_open_issues` | "What's still broken?" | Days open and the landlord's latest response for each issue |
+| `get_issue_history` | "What happened with the heater?" | Spoken summary of one issue's timeline |
+| `send_follow_up` | "Remind my landlord about the heater." | Reminder email, logged as verified |
+| `log_contact_attempt` | "I called my landlord about the sink." | Logged as tenant-reported (unverified) |
+| `confirm_fixed` | "The sink is fixed." | Closes the issue and tells the landlord |
+| `dispute_fix` | "The heater still isn't working." | Records the dispute and tells the landlord |
+| `get_photo_upload_link` | "How do I add photos?" | Emails the tenant: reply with photos, or use the upload link |
+| `generate_report` | "Make my repair report." | Printable dated report; the tenant is emailed the link |
+| `ping` | "Is FixTrail working?" | Health check |
+
+Users say *"the heater"*, not an ID, so FixTrail matches everyday words (and typos) to the right issue and asks a short
+question when it's ambiguous. Every reply is one or two speakable sentences, and tools answer in a few hundred
+milliseconds (Alexa+ requires under 500 ms), with emails sent in the background.
+
+**Agent Skill:** [`skills/fixtrail/SKILL.md`](skills/fixtrail/SKILL.md) follows the [Agent Skills](https://agentskills.io/)
+specification and passes its reference validator. It teaches any agent which tool fits what the tenant said, how to
+answer by voice, and the honesty rules (never present an unverified claim as proven; no legal advice).
+
+**Alexa+ simulator** (`/simulator`): speak (browser speech recognition, best in Chrome or Edge) or type. A Strands agent
+connects to FixTrail's `/mcp` exactly as Alexa+ would, and the transcript shows which MCP tool was called.
+`SIMULATOR_MODE=bedrock` uses an Amazon Bedrock model with the Agent Skill as instructions; `offline` (the default)
+uses keyword rules with the same agent loop and real MCP calls, so it works without an AWS account.
 
 ---
 
-## 16. Design Review: Strengths, Weaknesses, and Answers for Judges
+## Run it locally
 
-This section is an honest critique of FixTrail, used to make the design stronger. Each weakness found has a concrete fix that's already part of the build plan. Use this section to prepare the written submission and to answer judge questions.
+Requires **Python 3.10 or newer** (tested with 3.12) and Git. No AWS account needed.
 
-### 16.1 Verdict
-FixTrail convincingly solves one specific, real problem: **"Who told whom, and when?"** It does not force landlords to make repairs. What it does is give tenants, and fair landlords, trustworthy evidence that neither side usually has today. Its main trust gap, the server operator being able to rewrite history, is closed by putting record fingerprints in every email.
+**Windows (PowerShell)**
 
-### 16.2 Strengths, mapped to the judging criteria
+```powershell
+git clone https://github.com/himani-png/fixtrail.git
+cd fixtrail
+python -m venv .venv
+.venv\Scripts\python -m pip install -r requirements.txt
+copy .env.example .env
+.venv\Scripts\python scripts\seed.py --demo
+.venv\Scripts\python -m uvicorn app.main:app --reload
+```
 
-| Judging criterion | Why FixTrail scores well |
+**macOS / Linux**
+
+```bash
+git clone https://github.com/himani-png/fixtrail.git
+cd fixtrail
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+cp .env.example .env
+.venv/bin/python scripts/seed.py --demo
+.venv/bin/python -m uvicorn app.main:app --reload
+```
+
+Then open:
+
+| Address | What it is |
 |---|---|
-| **Tech implementation** | A real MCP server (Streamable HTTP, spec 2025-11-25) with 10 tools, an Agent Skill, and an Alexa+ simulator built on the Strands Agents SDK and Amazon Bedrock. A hash-chained, append-only event log enforced by database triggers. Fingerprints anchored outside the system in emails. AWS services: Bedrock, SES for email, S3 for photos. |
-| **Design** | Voice for the moment a problem happens ("Alexa, the heater stopped working"), web pages for what voice does badly (photos, landlord replies, reports), and email as a zero-install channel for both sides. Every interface is used where it fits best. |
-| **Potential impact** | Proof of notice is central to repair disputes, and tenants often need to show the landlord was told before they can pursue remedies (rules vary by place). The record is useful to tenants, landlords, housing inspectors, mediators, and tenant advocates. |
-| **Quality of the idea** | Existing tools each cover one piece: letter senders, landlord-run maintenance portals, or evidence apps that one person keeps privately. FixTrail combines voice capture, automatic notice to the landlord, a **neutral shared record** with honest "verified" vs. "tenant-reported" labels, and fingerprints held by both parties. It treats trust as a design problem instead of assuming every claim is true. |
+| http://localhost:8000 | Tenant dashboard (passcode `change-me`, set in `.env`) |
+| http://localhost:8000/simulator | Alexa+ simulator: click the microphone or an example phrase |
+| http://localhost:8000/verify | Check the record, or paste a fingerprint from an email in `outbox/` |
+| http://localhost:8000/mcp | The MCP endpoint, for MCP Inspector or any MCP client |
 
-### 16.3 What makes this design stand out
-1. **Neutrality.** Tenant-only apps feel one-sided and are easy for the other side to dismiss. A record that also protects landlords who respond quickly is more believable to a mediator, and it removes the incentive to make false claims: every claim goes straight to the other party.
-2. **Honest labels.** The system marks only what it can prove as **verified** (an email it actually sent, a photo it actually received). Everything else is clearly **tenant-reported**. Being upfront about the limits of proof is what makes the rest of the record credible.
-3. **Witnesses outside the system.** Fingerprints in old emails mean FixTrail itself can't quietly rewrite history. Tenant and landlord each hold copies that would expose any change.
-4. **It demos clearly.** Speak to Alexa, an email arrives, the landlord clicks a link, the timeline updates, and a tampering attempt is caught by an old email. Every step is visible and easy to follow.
+Leave out `--demo` to start with an empty record. Emails are saved as `.eml` files in `outbox/`; open one and its
+`/respond/...` link to act as the landlord.
 
-### 16.4 Weaknesses found, and how they're addressed
+### Try the scripts
 
-| Weakness | Risk | How FixTrail addresses it |
+Run these in a second terminal while the server is running (use `.venv/bin/python` on macOS/Linux):
+
+```powershell
+.venv\Scripts\python scripts\try_it.py            # a voice scenario over MCP, like Alexa+ would run it
+.venv\Scripts\python scripts\make_test_reply.py   # a tenant replies to an email with a photo...
+.venv\Scripts\python scripts\ingest_email.py      # ...and FixTrail checks and adds it
+.venv\Scripts\python scripts\tamper_demo.py --yes # rewrite history; then paste the printed fingerprint at /verify
+.venv\Scripts\python scripts\tamper_demo.py --restore
+```
+
+### Connect MCP Inspector
+
+```powershell
+npx @modelcontextprotocol/inspector --transport http --server-url http://localhost:8000/mcp
+```
+
+### Run the tests
+
+```powershell
+.venv\Scripts\python -m pytest -q
+```
+
+120 tests cover the hash chain and tamper detection, every tool (including real MCP calls), the web pages, photo
+replies by email, the simulator's full agent loop over HTTP, the demo tools, and the AWS integrations (with botocore's
+Stubber, so no AWS account is needed).
+
+## Configuration
+
+All settings live in `.env` (copied from [`.env.example`](.env.example), never committed).
+
+| Setting | Default | Purpose |
 |---|---|---|
-| Server operator could rewrite the log and recompute all hashes | A skeptic or a lawyer says "your own verify page would still pass" | Fingerprint and event number in every email, plus a "Check a fingerprint" tool on `/verify` (Section 5) |
-| Tenants could invent complaints | Unfair to landlords, undermines trust | Every complaint is emailed to the landlord immediately. Calls and in-person claims are labeled tenant-reported. Landlords can respond in the same record |
-| Photos could be old or staged | Misleading evidence | Verified time is the server's receipt time, not the photo's own date. Each file's sha256 is recorded. Email photos only accepted from the tenant's registered address with SES authentication checks |
-| Landlord never clicks the link | App seems to depend on landlord cooperation | Proof of notice comes from the sent emails themselves. The demo explicitly shows an ignoring landlord |
-| Email sent is not email seen | Notice disputed; spam folders | Stated openly in Limitations. Reminders create repeated notice. Future: certified-mail integration |
-| Some laws or leases require specific notice methods | Users might rely on FixTrail when they shouldn't | Prominent "not legal advice" disclaimer; framed as record-keeping |
-| Scope too big for a first-time builder | Half-finished demo | Must-have / nice-to-have / skip table (Section 8); core finished first (Phases 1–5b done), real Alexa+ access made optional by the simulator |
+| `BASE_URL` | `http://localhost:8000` | Public address used in email links; its host is allowed by the MCP endpoint |
+| `TENANT_PASSCODE` | `change-me` | Protects the tenant pages |
+| `PROPERTY_ADDRESS`, `TENANT_*`, `LANDLORD_*` | example values | The demo property and people |
+| `SIMULATOR_MODE` | `offline` | `bedrock` to use an Amazon Bedrock model |
+| `BEDROCK_MODEL_ID` | `us.amazon.nova-lite-v1:0` | Bedrock model for the simulator |
+| `MAILER` | `console` | `ses` to send real email with Amazon SES (`SES_FROM_EMAIL` required) |
+| `PHOTO_STORE` | `local` | `s3` to store photos in Amazon S3 (`S3_BUCKET` required) |
+| `INBOUND_EMAIL_DOMAIN` | `fixtrail.example.com` | Domain for `photos+<token>@...` reply addresses |
+| `INBOUND_SECRET`, `INBOUND_SNS_TOPIC_ARN`, `INBOUND_S3_BUCKET` | empty | Real photo replies through SES receiving |
+| `ALLOWED_HOSTS` | empty | Extra public host names for the MCP endpoint (for example a tunnel) |
 
-### 16.5 What FixTrail does not solve (say this openly)
-- **It proves notice; it doesn't get things fixed.** A landlord who doesn't care can still ignore everything. FixTrail's value is the evidence a tenant brings to a housing inspector, mediator, or court. Pitch it as **"evidence for when things go wrong,"** not "repairs get done faster."
-- **It's not a legal service.** It doesn't decide who is right, and whether records are accepted is up to the relevant court or agency.
+## Deploying
 
-Judges tend to trust a team more when it states its limits clearly.
+```bash
+docker build -t fixtrail .
+docker run -p 8000:8000 -v fixtrail-data:/data --env-file .env fixtrail
+```
 
-### 16.6 Anticipated judge questions
+The image runs as a non-root user, keeps all data in `/data` (mount a volume), and has a health check. See
+[docs/AWS.md](docs/AWS.md) for the AWS setup: Bedrock, SES sending and receiving, S3, SNS, least-privilege
+permissions, and hosting on a small instance with a persistent disk.
 
-**"Couldn't you, as the operator, just fake the whole log?"**
-We could rewrite our database, but we can't rewrite emails already sitting in the tenant's and landlord's inboxes. Each email contains the record's fingerprint at that moment. Paste any old fingerprint into the verify page and a rewritten history fails. We show this live in the demo.
+## Project structure
 
-**"What stops a tenant from lying?"**
-Every complaint is sent to the landlord the moment it's made, so a false claim gets answered immediately and the answer goes in the same record. Things we can't verify, like phone calls, are labeled tenant-reported rather than treated as fact.
+```
+app/
+  main.py           FastAPI app; MCP mounted at /mcp; security headers
+  mcp_tools.py      the 10 MCP tools (thin wrappers)
+  services.py       what each action does; shared by tools and web pages
+  db.py             schema, append_event, verify_chain, check_fingerprint
+  models.py         status from events, issue matching, wording
+  web.py            web pages, simulator API, /inbound/ses
+  simulator.py      Alexa+ simulator agent (Strands; Bedrock or offline model)
+  inbound_email.py  photo replies: address, sender, verdict, and image checks
+  mailer.py         ConsoleMailer and SESMailer
+  photos.py         LocalPhotoStore and S3PhotoStore
+  reports.py        report statistics, computed only from the event log
+  demo.py           clearly marked demo data with simulated dates
+skills/fixtrail/SKILL.md   the Agent Skill
+scripts/            seed, try_it, make_test_reply, ingest_email, tamper_demo
+tests/              120 tests
+docs/               AWS, design review, friction log, product feedback, build plan, screenshots
+```
 
-**"Why would a landlord ever use this?"**
-They don't have to; proof of notice works without them. But a landlord who responds quickly gets a dated record proving it, which protects them against false accusations and "I never got a response" claims.
+## Limitations and responsible use
 
-**"Why voice? Isn't a form simpler?"**
-Problems happen at inconvenient moments: water on the floor, no heat at night. Saying one sentence is easier than opening an app, which is why people often don't keep records at all. Voice is used for capturing; web pages handle what voice does badly.
+- FixTrail is a **record-keeping tool, not legal advice**. Tenant laws and notice requirements vary by place, and
+  some leases or laws require specific methods such as certified mail. Whether records are accepted as evidence is up
+  to the relevant court or agency.
+- It **proves notice and documents what happened; it can't force repairs.** Its value is the evidence a tenant (or a
+  fair landlord) can bring to an inspector, mediator, or court.
+- **An email sent is not an email read**, and messages from an unfamiliar sender can land in spam.
+- **Unverified claims stay unverified:** calls, texts, and visits FixTrail didn't witness are labeled as such.
+- Email fingerprints protect against rewriting history **only if the parties keep their emails**.
+- **Hackathon scope:** one property, one tenant passcode, unguessable landlord links, an in-memory login limit, and
+  SNS messages checked by secret and topic rather than signature. A real service would need accounts,
+  multi-property support, export, and stronger security and privacy controls (see the `/privacy` and `/terms`
+  pages in the app).
+- The **Alexa+ simulator** stands in for Alexa+ because the Alexa+ MCP Toolkit isn't available to participants. It
+  uses the same MCP endpoint, so a real Alexa+ connection needs no server changes beyond the add-on setup.
+- **Demo data** uses simulated dates and is bannered on every page and report. Real records always use server time.
 
-**"Does this exist already?"**
-Pieces of it do, and we looked (October 2026):
-- **Letter tools** like JustFix (NYC) send formal repair letters by certified mail. They create one strong notice, not an ongoing record.
-- **Landlord-run portals** like RentRedi and RENTCafé track maintenance requests. RENTCafé even has an Alexa skill for submitting requests. But the landlord's software holds the record, so it isn't neutral evidence.
-- **Evidence apps** like Kept, ProofNest, and Sealed timestamp and hash a person's own photos and logs. They're mostly one-sided and private, and they don't notify the other party.
-- **Shared records** like Cora (an early-stage app) and Fairhold (UK, mainly check-in/check-out reports) let both sides see one log with hashed files.
+## More documents
 
-What we haven't found is the combination: reporting by voice at the moment a problem happens, **automatic** notice to the landlord on every report, one neutral record both sides can respond in, honest verified vs. tenant-reported labels, and fingerprints sitting in **both parties' inboxes**, so even the operator can't rewrite history. Our edge is that combination, not any single feature.
+- [Design review](docs/DESIGN_REVIEW.md): strengths, weaknesses, and answers to likely judge questions
+- [AWS](docs/AWS.md): every AWS service used, and how to set it up
+- [Friction log](docs/FRICTION_LOG.md): every confusing or broken step, with suggestions
+- [Product feedback](docs/PRODUCT_FEEDBACK.md): feedback on each tool, plus feature requests
+- [Build plan](docs/BUILD_PLAN.md): the phase-by-phase plan this was built from
 
-**"Is this legal advice?"**
-No. FixTrail is a record-keeping tool. Notice requirements differ by state, city, and lease, and some require methods like certified mail.
+## License
 
-**"What would you build next?"**
-Certified-mail integration for places that require it, multi-property support for landlords, exports formatted for housing agencies and mediators, more languages, and optional Ring integration to record when a repair person actually arrived.
-
-### 16.7 Bottom line for the written submission
-> FixTrail is a neutral, tamper-evident repair record for renters and landlords. Tenants report problems by voice through Alexa+, every report is automatically sent to the landlord, and both sides can add to the same timeline. Each email carries a fingerprint of the record, so not even FixTrail can secretly rewrite history. It doesn't force repairs, but it gives tenants and fair landlords the trustworthy evidence they don't have today.
+[MIT](LICENSE)

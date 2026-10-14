@@ -164,3 +164,4 @@ def test_timeline_labels_email_photos(conn, issue, monkeypatch, tmp_path):
     page = client.get(f"/issues/{issue['id']}").text
     assert "Photo added via email" in page
     assert "Emailed by" in page and inbound_email.NO_VERDICTS in page
+    assert "Sent to: <code>None" not in page  # incoming email isn't shown as one FixTrail sent

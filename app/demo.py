@@ -21,7 +21,7 @@ def sample_png(width: int = 240, height: int = 160) -> bytes:
     """A small, real PNG image (a colour gradient), so no photo file is needed."""
     rows = b""
     for y in range(height):
-        rows += b"\x00" + b"".join(bytes([(60 + x) % 256, (110 + y) % 256, 180]) for x in range(width))
+        rows += b"\x00" + b"".join(bytes([40 + x * 180 // width, 80 + y * 150 // height, 190]) for x in range(width))
 
     def chunk(kind: bytes, data: bytes) -> bytes:
         return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
@@ -30,7 +30,7 @@ def sample_png(width: int = 240, height: int = 160) -> bytes:
     return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b"")
 
 
-def _photo_reply(conn, issue_id: str, sent_at: datetime) -> bytes:
+def _photo_reply(conn, issue_id: str) -> bytes:
     token = db.get_token_for_issue(conn, issue_id, "photo_reply")
     msg = EmailMessage()
     msg["From"] = f"{settings.tenant_name} <{settings.tenant_email}>"
@@ -77,7 +77,7 @@ def seed_demo(conn, now: datetime | None = None) -> None:
         # Kitchen sink: photo by email reply, landlord acknowledged and scheduled.
         (at(9, 8, 5), lambda: services.report_issue(conn, "Kitchen sink leaking", "kitchen", "water")),
         (at(9, 8, 22), lambda: inbound_email.process_email(
-            conn, _photo_reply(conn, issue_id("Kitchen sink leaking"), at(9, 8, 22)))),
+            conn, _photo_reply(conn, issue_id("Kitchen sink leaking")))),
         (at(7, 12, 10), respond("Kitchen sink leaking", "acknowledge", note="Plumber booked")),
         (at(5, 9, 45), respond("Kitchen sink leaking", "schedule", when=in_two_days, time="09:30")),
         # Front door lock: both sides make claims FixTrail can't verify.
