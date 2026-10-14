@@ -79,3 +79,13 @@
 - Severity: low
 - Workaround: Use `agentskills validate <folder>`.
 - Suggestion: Align the documented command with the installed one. (Not an Amazon tool, but it affects the Alexa+ track's Agent Skills requirement.)
+
+### Entry 9: MCP server silently rejects requests on a real domain
+- Tool/API/SDK: MCP Python SDK (`streamable_http_app`, DNS-rebinding protection)
+- Task attempted: Prepare FixTrail's MCP endpoint for a public HTTPS domain (needed for Alexa+ or the hosted simulator).
+- Steps taken: Sent an MCP `initialize` request with `Host: fixtrail-demo.example.com` to the app as configured from the SDK examples.
+- Expected: The request works, or a clear startup warning that only localhost is allowed.
+- Actually happened: `421 Misdirected Request` with body "Invalid Host header". With the default `host="127.0.0.1"`, the SDK turns on DNS-rebinding protection that allows only localhost host names. Everything works locally and fails once deployed; the only clue is a log line.
+- Severity: high (would have broken the deployed demo)
+- Workaround: Pass `transport_security=TransportSecuritySettings(...)` with localhost plus the host from `BASE_URL` and an `ALLOWED_HOSTS` list, keeping the protection on. Verified in Docker: public host 200, unknown host 421.
+- Suggestion for Amazon: In the Alexa+ MCP QuickStart, mention configuring allowed hosts when deploying a Python MCP server behind a domain or tunnel.
