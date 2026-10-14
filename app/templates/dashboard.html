@@ -27,6 +27,10 @@
 <div class="notice bad">Record problem at event #{{ chain.broken_at }}: {{ chain.reason }}. <a href="/verify">Details</a></div>
 {% endif %}
 
+{% if open_issues or closed_issues %}
+<p><a class="button secondary" href="/reports/all">Repair report (all issues)</a></p>
+{% endif %}
+
 <h2>Open ({{ open_issues|length }})</h2>
 {% for issue in open_issues %}{{ issue_card(issue) }}{% else %}
 <p class="muted">No open issues. Report one by saying “Alexa, the kitchen sink is leaking.”</p>

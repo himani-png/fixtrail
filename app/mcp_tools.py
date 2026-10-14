@@ -92,6 +92,34 @@ def confirm_fixed(issue: IssueRef) -> str:
 
 
 @mcp.tool()
+def send_follow_up(issue: IssueRef) -> str:
+    """Send the landlord a reminder email about an open repair issue, e.g.
+    'remind my landlord about the heater'. The reminder is logged as verified."""
+    with _conn() as conn:
+        return services.send_follow_up(conn, issue)
+
+
+@mcp.tool()
+def get_photo_upload_link(issue: IssueRef) -> str:
+    """Email the tenant a way to add photos to an issue: they can reply to the
+    email with photos attached, or use the upload link inside. Use when the
+    tenant wants to add or send photos."""
+    with _conn() as conn:
+        return services.get_photo_upload_link(conn, issue)
+
+
+@mcp.tool()
+def generate_report(
+    issue: Annotated[str | None, Field(description="One issue in the tenant's words, or leave empty for a report covering all issues.")] = None,
+) -> str:
+    """Create a printable, dated repair report with the full timeline and
+    landlord response times, and email the tenant the link. Use for 'make my
+    repair report' or when they need records for a landlord, inspector, or court."""
+    with _conn() as conn:
+        return services.generate_report(conn, issue)
+
+
+@mcp.tool()
 def dispute_fix(
     issue: IssueRef,
     reason: Annotated[str, Field(description="What is still wrong, in the tenant's words.")],

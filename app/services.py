@@ -112,6 +112,8 @@ LANDLORD_MESSAGES = {
     "new_issue": ("Repair request: {title}", "{tenant} reported a repair issue through FixTrail."),
     "disputed": ("Repair not complete: {title}", "{tenant} says this repair is not complete.\nReason given: {reason}"),
     "confirmed_fixed": ("Repair confirmed: {title}", "{tenant} confirmed this repair is complete. Thank you."),
+    "follow_up": ("Reminder: {title}", "This is a reminder about a repair issue {tenant} reported {reported_ago}. "
+                  "It is still open."),
 }
 
 
@@ -142,7 +144,12 @@ def _send_landlord_email(db_path: str, issue_id: str, kind: str, reason: str) ->
         prop = db.get_or_create_property(conn)
         token = db.get_token_for_issue(conn, issue_id, "landlord")
         subject_tpl, intro_tpl = LANDLORD_MESSAGES[kind]
-        values = {"title": issue["title"], "tenant": prop["tenant_name"], "reason": reason}
+        values = {
+            "title": issue["title"],
+            "tenant": prop["tenant_name"],
+            "reason": reason,
+            "reported_ago": models.ago(models.days_since(issue["created_at"])),
+        }
         subject = subject_tpl.format(**values)
         body = (
             f"Hello {prop['landlord_name']},\n\n"
@@ -157,7 +164,8 @@ def _send_landlord_email(db_path: str, issue_id: str, kind: str, reason: str) ->
             + fingerprint_footer(conn)
         )
         message_id = _mailer().send(prop["landlord_email"], subject, body)
-        db.append_event(conn, issue_id, "landlord_notified", "system", "verified", {
+        event_type = "follow_up_sent" if kind == "follow_up" else "landlord_notified"
+        db.append_event(conn, issue_id, event_type, "system", "verified", {
             "kind": kind,
             "to": prop["landlord_email"],
             "subject": subject,
@@ -190,6 +198,47 @@ def _email_tenant_confirmation(db_path: str, issue_id: str) -> None:
             body,
             reply_to=f"photos+{token}@{settings.inbound_email_domain}",
         )
+    finally:
+        conn.close()
+
+
+def _email_tenant_photo_link(db_path: str, issue_id: str) -> None:
+    """Two ways to add photos: reply to this email, or use the upload page."""
+    conn = db.connect(db_path)
+    try:
+        issue = db.get_issue(conn, issue_id)
+        prop = db.get_or_create_property(conn)
+        token = db.get_token_for_issue(conn, issue_id, "photo_reply")
+        body = (
+            f"Hi {prop['tenant_name']},\n\n"
+            f"To add photos to: {issue['title']} ({issue['location']})\n\n"
+            f"Option 1: reply to this email with the photos attached.\n"
+            f"Option 2: upload them here:\n"
+            f"{settings.base_url}/issues/{issue_id}/photos\n"
+            + fingerprint_footer(conn)
+        )
+        _mailer().send(
+            prop["tenant_email"],
+            f"Add photos: {issue['title']}",
+            body,
+            reply_to=f"photos+{token}@{settings.inbound_email_domain}",
+        )
+    finally:
+        conn.close()
+
+
+def _email_tenant_report(db_path: str, report_path: str, scope: str) -> None:
+    conn = db.connect(db_path)
+    try:
+        prop = db.get_or_create_property(conn)
+        body = (
+            f"Hi {prop['tenant_name']},\n\n"
+            f"Your FixTrail repair report ({scope}) is ready:\n"
+            f"{settings.base_url}{report_path}\n\n"
+            f"Open it in a browser and use Print to save it as a PDF.\n"
+            + fingerprint_footer(conn)
+        )
+        _mailer().send(prop["tenant_email"], "Your FixTrail repair report", body)
     finally:
         conn.close()
 
@@ -349,6 +398,41 @@ def dispute_fix(conn, issue_query: str, reason: str) -> str:
     _refresh_status(conn, issue["id"])
     _queue_landlord_email(conn, issue["id"], "disputed", reason)
     return f"I've recorded that {_name(issue)} still isn't fixed, and I'm telling your landlord."
+
+
+def send_follow_up(conn, issue_query: str) -> str:
+    issue, problem = find_issue(conn, issue_query)
+    if issue is None:
+        return problem
+    earlier = sum(1 for e in db.list_events(conn, issue["id"]) if e["type"] == "follow_up_sent")
+    _queue_landlord_email(conn, issue["id"], "follow_up")
+    extra = f" That's reminder number {earlier + 1}." if earlier else ""
+    return f"I'm sending your landlord a reminder about {_name(issue)}.{extra}"
+
+
+def get_photo_upload_link(conn, issue_query: str) -> str:
+    issue, problem = find_issue(conn, issue_query)
+    if issue is None:
+        return problem
+    _later(_email_tenant_photo_link, db.database_path(conn), issue["id"])
+    return (f"I'm emailing you now. Reply to that email with photos of {_name(issue)}, "
+            "or use the upload link inside.")
+
+
+def generate_report(conn, issue_query: str | None = None) -> str:
+    if issue_query and issue_query.strip():
+        issue, problem = find_issue(conn, issue_query)
+        if issue is None:  # reports can cover closed issues, too
+            issue, closed_problem = find_issue(conn, issue_query, include_closed=True)
+            if issue is None:
+                return problem or closed_problem
+        path, scope, spoken = f"/reports/{issue['id']}", issue["title"], f"for {_name(issue)}"
+    else:
+        if not db.list_issues(conn):
+            return "There's nothing to report yet. You haven't reported any repair issues."
+        path, scope, spoken = "/reports/all", "all issues", "covering all your issues"
+    _later(_email_tenant_report, db.database_path(conn), path, scope)
+    return f"Your repair report {spoken} is ready. I'm emailing you the link."
 
 
 # -------------------------------------------- landlord responses (web)

@@ -17,7 +17,7 @@ from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
-from app import db, models, services
+from app import db, models, reports, services
 from app.config import settings
 from app.photos import get_store
 
@@ -245,6 +245,30 @@ def respond(request: Request, token: str, action: str = Form(...), when: str = F
             )
     # Redirect after posting, so refreshing the page doesn't submit twice.
     return RedirectResponse(f"/respond/{token}?done=1", status_code=303)
+
+
+# ------------------------------------------------------------ report page
+
+@router.get("/reports/{issue_id}", response_class=HTMLResponse)
+def report_page(request: Request, issue_id: str, t: str = ""):
+    """Printable report. 'all' covers every issue (tenant only); a single
+    issue's report is also open to the landlord through their secret link."""
+    with closing(db.connect()) as conn:
+        landlord_ok = bool(t) and issue_id != "all" and db.lookup_token(conn, t, "landlord") == issue_id
+        if not (is_tenant(request) or landlord_ok):
+            return _to_login(request) if not t else Response(status_code=403)
+        if issue_id != "all" and db.get_issue(conn, issue_id) is None:
+            return templates.TemplateResponse(request, "not_found.html", {}, status_code=404)
+        report = reports.build_report(conn, None if issue_id == "all" else [issue_id])
+    landlord_token = t if landlord_ok and not is_tenant(request) else None
+    for section in report["sections"]:
+        section["timeline"] = _timeline(section["events"], landlord_token=landlord_token)
+    return templates.TemplateResponse(request, "report.html", {
+        **report,
+        "generated": _when(report["generated_at"]),
+        "scope": "All issues" if issue_id == "all" else report["sections"][0]["issue"]["title"],
+        "base_url": settings.base_url,
+    })
 
 
 # ------------------------------------------------------------ verify page

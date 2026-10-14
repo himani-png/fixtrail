@@ -14,7 +14,10 @@
   {{ issue.location }} · {{ issue.category }} · {{ issue.urgency }} · reported {{ issue.reported }}
   {% if issue.status != "closed" %}· open {{ issue.days_open }}{% endif %}
 </p>
-<p><a class="button secondary" href="/issues/{{ issue.id }}/photos">Add photos</a></p>
+<p>
+  <a class="button secondary" href="/issues/{{ issue.id }}/photos">Add photos</a>
+  <a class="button secondary" href="/reports/{{ issue.id }}">Repair report</a>
+</p>
 
 <h2>Timeline</h2>
 {% include "_timeline.html" %}

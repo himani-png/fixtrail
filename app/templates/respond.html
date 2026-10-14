@@ -63,6 +63,7 @@
 {% endif %}
 
 <h2>Shared record</h2>
-<p class="muted small">You and the tenant see the same timeline. Entries can't be edited or deleted.</p>
+<p class="muted small">You and the tenant see the same timeline. Entries can't be edited or deleted.
+  <a href="/reports/{{ issue.id }}?t={{ token }}">Printable report</a></p>
 {% include "_timeline.html" %}
 {% endblock %}

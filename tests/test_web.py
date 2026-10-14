@@ -189,6 +189,39 @@ def test_photo_access_needs_tenant_or_landlord_link(client, tenant, issue_id):
     assert client.get(f"/photos/{event_id}?t={landlord_token(issue_id)}").content == PNG
 
 
+# ----------------------------------------------------------------- report
+
+def test_report_page_for_tenant(tenant, issue_id):
+    page = tenant.get(f"/reports/{issue_id}").text
+    assert "Repair record" in page
+    assert "Kitchen sink leaking" in page
+    assert "No landlord response in" in page
+    assert "Record intact" in page
+    assert "Print / Save as PDF" in page
+
+
+def test_report_shows_response_time_after_landlord_acts(client, tenant, issue_id):
+    client.post(f"/respond/{landlord_token(issue_id)}", data={"action": "acknowledge"})
+    assert "Landlord first responded after" in tenant.get(f"/reports/{issue_id}").text
+
+
+def test_all_issues_report(tenant, issue_id):
+    conn = db.connect()
+    services.report_issue(conn, "Heater not working", "bedroom")
+    conn.close()
+    page = tenant.get("/reports/all").text
+    assert "All issues" in page
+    assert "Kitchen sink leaking" in page and "Heater not working" in page
+
+
+def test_report_access_rules(client, issue_id):
+    assert client.get(f"/reports/{issue_id}", follow_redirects=False).status_code == 303  # to login
+    assert client.get(f"/reports/{issue_id}?t=wrong").status_code == 403
+    assert "Repair record" in client.get(f"/reports/{issue_id}?t={landlord_token(issue_id)}").text
+    # The landlord link covers only their issue, not the all-issues report.
+    assert client.get(f"/reports/all?t={landlord_token(issue_id)}").status_code == 403
+
+
 # ----------------------------------------------------------------- verify
 
 def test_verify_page_and_fingerprint_check(client, issue_id):
