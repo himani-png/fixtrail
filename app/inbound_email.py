@@ -83,6 +83,36 @@ def _image_parts(msg: EmailMessage):
         yield filename or f"photo.{part.get_content_subtype()}", data
 
 
+def ses_verdicts(receipt: dict) -> dict:
+    """Pull SES's checks out of a receipt: {'spf': 'PASS', 'dkim': 'PASS', ...}."""
+    names = {"spf": "spfVerdict", "dkim": "dkimVerdict", "spam": "spamVerdict",
+             "virus": "virusVerdict", "dmarc": "dmarcVerdict"}
+    return {short: receipt.get(field, {}).get("status", "MISSING") for short, field in names.items()}
+
+
+def fetch_from_s3(bucket: str, key: str) -> bytes:
+    import boto3
+    return boto3.client("s3", region_name=settings.aws_region).get_object(Bucket=bucket, Key=key)["Body"].read()
+
+
+def handle_ses_notification(conn, notification: dict, fetch=fetch_from_s3) -> Result:
+    """Production path: an SES receipt rule saved the email to S3 and sent this
+    notification (via SNS). Fetch the email and run the same checks as locally,
+    this time with SES's real spam, virus, and sender verdicts."""
+    if notification.get("notificationType") != "Received":
+        return Result(False, f"ignored notification type {notification.get('notificationType')!r}")
+    receipt = notification.get("receipt", {})
+    action = receipt.get("action", {})
+    if action.get("type") != "S3":
+        return Result(False, "the receipt rule must store emails in S3")
+    bucket, key = action.get("bucketName"), action.get("objectKey")
+    if not settings.inbound_s3_bucket or bucket != settings.inbound_s3_bucket:
+        # Only ever read from our own inbound bucket.
+        return Result(False, "the email isn't in FixTrail's inbound bucket")
+    raw = fetch(bucket, key)
+    return process_email(conn, raw, verdicts=ses_verdicts(receipt))
+
+
 def process_email(conn, raw: bytes, verdicts: dict | None = None, notify: bool = True) -> Result:
     msg = BytesParser(policy=policy.default).parsebytes(raw)
 

@@ -30,6 +30,16 @@ class Settings:
     simulator_mcp_url: str
     bedrock_model_id: str
     aws_region: str
+    allowed_hosts: list[str]
+    ses_from_email: str
+    s3_bucket: str
+    inbound_secret: str
+    inbound_sns_topic_arn: str
+    inbound_s3_bucket: str
+
+
+def _list(value: str) -> list[str]:
+    return [item.strip() for item in value.split(",") if item.strip()]
 
 
 _base_url = os.getenv("BASE_URL", "http://localhost:8000").rstrip("/")
@@ -51,4 +61,10 @@ settings = Settings(
     simulator_mcp_url=os.getenv("SIMULATOR_MCP_URL", f"{_base_url}/mcp"),
     bedrock_model_id=os.getenv("BEDROCK_MODEL_ID", "us.amazon.nova-lite-v1:0"),
     aws_region=os.getenv("AWS_REGION", "us-east-1"),
+    allowed_hosts=_list(os.getenv("ALLOWED_HOSTS", "")),
+    ses_from_email=os.getenv("SES_FROM_EMAIL", ""),
+    s3_bucket=os.getenv("S3_BUCKET", ""),
+    inbound_secret=os.getenv("INBOUND_SECRET", ""),
+    inbound_sns_topic_arn=os.getenv("INBOUND_SNS_TOPIC_ARN", ""),
+    inbound_s3_bucket=os.getenv("INBOUND_S3_BUCKET", ""),
 )

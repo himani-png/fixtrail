@@ -12,21 +12,35 @@
 
 import hashlib
 import hmac
+import json
 import secrets
+import time
+from collections import defaultdict, deque
 from contextlib import closing
 from pathlib import Path
+from urllib.parse import urlparse
 
+import httpx
 from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
-from app import db, models, reports, services
+from app import db, inbound_email, models, reports, services
 from app.config import settings
 from app.photos import get_store
 
 router = APIRouter()
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+
+
+def _is_demo_data() -> bool:
+    with closing(db.connect()) as conn:
+        return db.is_demo(conn)
+
+
+# Every page and report can show a "Demo data" banner (see app/demo.py).
+templates.env.globals["is_demo_data"] = _is_demo_data
 
 COOKIE_NAME = "fixtrail_tenant"
 
@@ -57,15 +71,36 @@ def login_page(request: Request, next: str = "/"):
     return templates.TemplateResponse(request, "login.html", {"next": _safe_next(next), "error": None})
 
 
+# Slow down passcode guessing: at most 10 wrong tries per address per 10 minutes.
+MAX_FAILURES, FAILURE_WINDOW = 10, 600
+_failures: dict[str, deque] = defaultdict(deque)
+
+
+def _too_many_failures(client: str) -> bool:
+    attempts = _failures[client]
+    while attempts and attempts[0] < time.monotonic() - FAILURE_WINDOW:
+        attempts.popleft()
+    return len(attempts) >= MAX_FAILURES
+
+
 @router.post("/login")
 def login(request: Request, passcode: str = Form(""), next: str = Form("/")):
+    client = request.client.host if request.client else "unknown"
+    if _too_many_failures(client):
+        return templates.TemplateResponse(
+            request, "login.html", {"next": _safe_next(next), "error": "Too many attempts. Try again in a few minutes."},
+            status_code=429,
+        )
     if not hmac.compare_digest(passcode, settings.tenant_passcode):
+        _failures[client].append(time.monotonic())
         return templates.TemplateResponse(
             request, "login.html", {"next": _safe_next(next), "error": "That passcode isn't right."},
             status_code=401,
         )
+    _failures.pop(client, None)
     response = RedirectResponse(_safe_next(next), status_code=303)
-    response.set_cookie(COOKIE_NAME, _cookie_value(), httponly=True, samesite="lax", max_age=60 * 60 * 24 * 30)
+    response.set_cookie(COOKIE_NAME, _cookie_value(), httponly=True, samesite="lax", max_age=60 * 60 * 24 * 30,
+                        secure=settings.base_url.startswith("https://"))
     return response
 
 
@@ -331,6 +366,56 @@ def simulator_reset(request: Request):
         return JSONResponse({"error": "Please log in again."}, status_code=401)
     get_simulator().reset(request.cookies.get(SIM_COOKIE) or "default")
     return JSONResponse({"ok": True})
+
+
+# ------------------------------------------------------- policy pages
+
+@router.get("/privacy", response_class=HTMLResponse)
+def privacy(request: Request):
+    return templates.TemplateResponse(request, "privacy.html", {})
+
+
+@router.get("/terms", response_class=HTMLResponse)
+def terms(request: Request):
+    return templates.TemplateResponse(request, "terms.html", {})
+
+
+# ------------------------------------------- inbound email (production)
+
+@router.post("/inbound/ses")
+async def inbound_ses(request: Request, secret: str = ""):
+    """Amazon SNS calls this when SES receives a photo-reply email.
+
+    Protection: a long secret in the subscription URL, the SNS topic must be
+    ours, and emails are only read from our own S3 bucket. (Verifying SNS
+    message signatures would be a further step for a production service.)
+    """
+    if not settings.inbound_secret or not hmac.compare_digest(secret, settings.inbound_secret):
+        return Response(status_code=403)
+    try:
+        envelope = json.loads(await request.body())  # SNS sends JSON as text/plain
+    except ValueError:
+        return Response(status_code=400)
+    if envelope.get("TopicArn") != settings.inbound_sns_topic_arn:
+        return Response(status_code=403)
+
+    kind = envelope.get("Type")
+    if kind == "SubscriptionConfirmation":
+        url = envelope.get("SubscribeURL", "")
+        host = urlparse(url).hostname or ""
+        if not (url.startswith("https://") and host.startswith("sns.") and host.endswith(".amazonaws.com")):
+            return Response(status_code=400)
+        async with httpx.AsyncClient(timeout=10) as client:
+            await client.get(url)  # confirms the subscription with AWS
+        return JSONResponse({"subscribed": True})
+    if kind != "Notification":
+        return JSONResponse({"ignored": kind})
+
+    notification = json.loads(envelope.get("Message", "{}"))
+    with closing(db.connect()) as conn:
+        result = await run_in_threadpool(inbound_email.handle_ses_notification, conn, notification)
+    return JSONResponse({"accepted": result.accepted, "reason": result.reason,
+                         "photos_added": result.photos_added})
 
 
 # ------------------------------------------------------------ verify page

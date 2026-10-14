@@ -28,15 +28,44 @@ class LocalPhotoStore:
         return (self.root / key).read_bytes()
 
 
+class S3PhotoStore:
+    """Production: keep photos in a private Amazon S3 bucket (encrypted at rest)."""
+
+    CONTENT_TYPES = {"jpg": "image/jpeg", "png": "image/png"}
+
+    def __init__(self, bucket: str | None = None, client=None):
+        self.bucket = bucket or settings.s3_bucket
+        if not self.bucket:
+            raise RuntimeError("Set S3_BUCKET to the name of your photo bucket.")
+        if client is None:
+            import boto3
+            client = boto3.client("s3", region_name=settings.aws_region)
+        self.client = client
+
+    def save(self, key: str, data: bytes) -> None:
+        ext = key.rsplit(".", 1)[-1].lower()
+        self.client.put_object(
+            Bucket=self.bucket, Key=key, Body=data,
+            ContentType=self.CONTENT_TYPES.get(ext, "application/octet-stream"),
+            ServerSideEncryption="AES256",
+        )
+
+    def load(self, key: str) -> bytes:
+        return self.client.get_object(Bucket=self.bucket, Key=key)["Body"].read()
+
+
 store: PhotoStore | None = None  # created on first use; tests swap in a temp folder
 
 
 def get_store() -> PhotoStore:
     global store
     if store is None:
-        if settings.photo_store != "local":
-            raise NotImplementedError(f"PHOTO_STORE={settings.photo_store!r} is not available yet (S3 comes in Phase 7)")
-        store = LocalPhotoStore()
+        if settings.photo_store == "local":
+            store = LocalPhotoStore()
+        elif settings.photo_store == "s3":
+            store = S3PhotoStore()
+        else:
+            raise ValueError(f"Unknown PHOTO_STORE={settings.photo_store!r}; use 'local' or 's3'.")
     return store
 
 

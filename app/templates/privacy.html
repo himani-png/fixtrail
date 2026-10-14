@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Privacy · FixTrail{% endblock %}
+
+{% block content %}
+<h1>Privacy</h1>
+<p class="muted">FixTrail is a hackathon project. This page explains, in plain language, what it stores and why.</p>
+
+<h2>What FixTrail stores</h2>
+<ul>
+  <li><strong>Property details:</strong> the address, and the tenant's and landlord's names and email addresses.</li>
+  <li><strong>Repair events:</strong> each issue reported, each email FixTrail sent (including a copy of the text),
+    each landlord response, and each contact the tenant says they made. Every event has a server timestamp.</li>
+  <li><strong>Photos</strong> the tenant uploads or emails in, with a fingerprint (SHA-256) of each file. For emailed
+    photos: the sender address, the email's Message-ID, and the email provider's spam and authentication results.
+    The text of reply emails is not stored.</li>
+  <li><strong>Voice requests</strong> in the Alexa+ simulator are turned into text by your browser and sent to FixTrail
+    to answer. In Bedrock mode, that text is sent to an AI model on Amazon Bedrock. The conversation is kept in
+    memory only and is not saved.</li>
+</ul>
+
+<h2>Why</h2>
+<p>To keep a dated, shared record of repair problems that both the tenant and the landlord can rely on, and to
+email each party about updates.</p>
+
+<h2>Who can see it</h2>
+<ul>
+  <li>The <strong>tenant</strong> (with the passcode) sees the full record.</li>
+  <li>The <strong>landlord</strong> sees each issue they were emailed about, through a private link.</li>
+  <li>The <strong>verify page</strong> shows only whether the record is intact and its fingerprints, not its contents.</li>
+  <li>FixTrail does not sell data or use it for advertising.</li>
+</ul>
+
+<h2>Why records can't be deleted one by one</h2>
+<p>The record is append-only by design: entries can't be edited or deleted, so neither side can rewrite history.
+If FixTrail were run as a real service, the whole record could be exported or deleted on request, except where an
+active dispute means both parties need it preserved.</p>
+
+<h2>Services used</h2>
+<p>When deployed on AWS: Amazon SES sends and receives email, Amazon S3 stores photos, and Amazon Bedrock runs the
+simulator's AI model. Speech recognition in the simulator is provided by your browser, which may use its own
+online speech service.</p>
+{% endblock %}

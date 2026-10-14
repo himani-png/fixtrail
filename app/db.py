@@ -83,6 +83,12 @@ CREATE TABLE IF NOT EXISTS tokens (
     created_at TEXT NOT NULL
 );
 
+-- Small key-value settings, e.g. demo_data = 'true' for generated demo records.
+CREATE TABLE IF NOT EXISTS meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
 CREATE TRIGGER IF NOT EXISTS events_no_update
 BEFORE UPDATE ON events
 BEGIN
@@ -316,6 +322,22 @@ def list_issues(conn: sqlite3.Connection) -> list[dict]:
 def set_issue_status(conn: sqlite3.Connection, issue_id: str, status: str) -> None:
     """Update the cached status. (Allowed: only `events` is append-only.)"""
     conn.execute("UPDATE issues SET status = ? WHERE id = ?", (status, issue_id))
+
+
+# -------------------------------------------------------------------- meta
+
+def set_meta(conn: sqlite3.Connection, key: str, value: str) -> None:
+    conn.execute("INSERT INTO meta (key, value) VALUES (?, ?) "
+                 "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (key, value))
+
+
+def get_meta(conn: sqlite3.Connection, key: str) -> str | None:
+    row = conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+    return row["value"] if row else None
+
+
+def is_demo(conn: sqlite3.Connection) -> bool:
+    return get_meta(conn, "demo_data") == "true"
 
 
 # ------------------------------------------------------------------ tokens
