@@ -1,0 +1,8 @@
+mcp==2.3.0
+fastapi
+uvicorn
+jinja2
+python-multipart
+python-dotenv
+pytest
+httpx

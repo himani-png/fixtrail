@@ -1,0 +1,14 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Secrets - never commit
+.env
+
+# Local data (generated at runtime)
+*.db
+outbox/
+uploads/
+inbox/
